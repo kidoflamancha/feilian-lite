@@ -119,11 +119,13 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: cargo test -p feilian-helper-client
+      - name: Compile desktop tests
+        run: cargo test -p feilian-desktop --no-run
       - name: Test desktop crate
         env:
           RUST_BACKTRACE: 1
         run: |
-          $env:PATH = "$PWD\target\debug;$env:PATH"
+          Copy-Item -Path target/debug/*.dll -Destination target/debug/deps -Force
           cargo test -p feilian-desktop
       - name: Build Windows desktop
         run: npm --prefix apps/desktop run tauri -- build --no-bundle
