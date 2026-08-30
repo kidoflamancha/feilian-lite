@@ -36,7 +36,7 @@ pub fn gen_wg_keypair() -> (String, String) {
 pub fn gen_public_key_from_private(private_key: &String) -> Result<String> {
     let key = base64
         .decode(private_key)
-        .with_context(|| format!("failed to base64 decode private key {private_key}"))?;
+        .context("failed to base64 decode private key")?;
     let key: [u8; 32] = key
         .try_into()
         .map_err(|_| anyhow!("private key has invalid length"))?;

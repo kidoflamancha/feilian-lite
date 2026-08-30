@@ -26,11 +26,18 @@ use crate::config::{
 };
 use crate::qrcode::TerminalQrCode;
 use crate::resp::*;
+use crate::session::{QrChallenge, QrPollStatus};
 use crate::state::State;
 use crate::totp::{totp_offset, TIME_STEP};
 use crate::utils;
 
 const COOKIE_FILE_SUFFIX: &str = "cookies.json";
+
+fn auth_trace(event: &str) {
+    if std::env::var("FEILIAN_AUTH_TRACE").as_deref() == Ok("1") {
+        eprintln!("[feilian-auth] {event}");
+    }
+}
 
 fn merge_additional_routes(
     mut routes: Vec<String>,
@@ -130,6 +137,7 @@ fn corplink_client_builder() -> ClientBuilder {
 pub struct Client {
     conf: Config,
     cookie: Arc<CookieStoreMutex>,
+    cookie_file: path::PathBuf,
     c: reqwest::Client,
     probe_client: reqwest::Client,
     api_url: ApiUrl,
@@ -146,16 +154,79 @@ struct SelectedVpn {
     set_cookie_headers: Vec<header::HeaderValue>,
 }
 
+enum TpsTokenStatus {
+    Pending,
+    Authenticated(String),
+}
+
+fn select_qr_challenge(
+    login_orders: &[String],
+    methods: &[RespTpsLoginMethod],
+    configured_platform: Option<&str>,
+) -> Option<QrChallenge> {
+    login_orders.iter().find_map(|login_method| {
+        if !matches!(login_method.as_str(), PLATFORM_LARK | PLATFORM_OIDC) {
+            return None;
+        }
+        if configured_platform
+            .is_some_and(|platform| !platform.is_empty() && platform != login_method.as_str())
+        {
+            return None;
+        }
+        methods
+            .iter()
+            .find(|method| method.alias == *login_method)
+            .map(|method| QrChallenge {
+                login_url: method.login_url.clone(),
+                token: method.token.clone(),
+                expires_at_unix: None,
+            })
+    })
+}
+
+fn parse_tps_token_response(resp: Resp<RespLogin>) -> Result<TpsTokenStatus> {
+    auth_trace(&format!("token-check response code={}", resp.code));
+    match resp.code {
+        0 => Ok(TpsTokenStatus::Authenticated(
+            resp.data
+                .context("tps token check missing redirect url")?
+                .url,
+        )),
+        101 | 3040 => Ok(TpsTokenStatus::Pending),
+        _ => {
+            let msg = resp
+                .message
+                .unwrap_or_else(|| "tps token check failed".to_string());
+            bail!(msg)
+        }
+    }
+}
+
+fn otp_secret_from_uri(otp_uri: &str) -> Result<Option<String>> {
+    if otp_uri.is_empty() {
+        return Ok(None);
+    }
+    let url = Url::parse(otp_uri).context("failed to parse otp uri")?;
+    Ok(url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "secret").then(|| value.into_owned())))
+}
+
+fn vpn_matches_selection(
+    vpn: &RespVpnInfo,
+    configured_name: Option<&str>,
+    requested_id: Option<i32>,
+) -> bool {
+    configured_name.is_none_or(|name| vpn.en_name == name)
+        && requested_id.is_none_or(|id| vpn.id == id)
+}
+
 unsafe impl Send for Client {}
 
 unsafe impl Sync for Client {}
 
 pub async fn get_company_url(code: &str) -> anyhow::Result<RespCompany> {
-    let c = ClientBuilder::new()
-        // allow invalid certs because this cert is signed by corplink
-        .danger_accept_invalid_certs(true)
-        .build()
-        .context("build client")?;
+    let c = ClientBuilder::new().build().context("build client")?;
     let mut m = Map::new();
     m.insert("code".to_string(), json!(code));
     let body = serde_json::to_string(&m).context("serialize company request body")?;
@@ -250,6 +321,7 @@ impl Client {
         Ok(Client {
             conf,
             cookie: Arc::clone(&cookie_store),
+            cookie_file,
             c,
             probe_client,
             api_url: ApiUrl::new(&conf_bak)?,
@@ -264,18 +336,7 @@ impl Client {
     }
 
     fn save_cookie(&self) -> Result<()> {
-        let interface_name = self
-            .conf
-            .interface_name
-            .as_ref()
-            .context("interface name missing in config")?;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .append(false)
-            .open(format!("{}_{}", interface_name, COOKIE_FILE_SUFFIX))
-            .map(io::BufWriter::new)
-            .with_context(|| "failed to open cookie file for writing")?;
+        let mut file = open_private_cookie_file(&self.cookie_file).map(io::BufWriter::new)?;
         let c = self
             .cookie
             .lock()
@@ -387,35 +448,34 @@ impl Client {
         matches!(self.conf.state.as_ref(), None | Some(State::Init))
     }
 
-    async fn check_tps_token(&mut self, token: &String) -> Result<String> {
+    pub fn totp_secret(&self) -> Option<&str> {
+        self.conf.code.as_deref()
+    }
+
+    async fn check_tps_token(&mut self, token: &str) -> Result<TpsTokenStatus> {
         // tps confirmed, try to login with token
         let mut m = Map::new();
         m.insert("token".to_string(), json!(token));
 
-        let resp = self
+        let resp = match self
             .request::<RespLogin>(ApiName::TpsTokenCheck, Some(m))
-            .await?;
-        match resp.code {
-            0 => resp
-                .data
-                .context("tps token check missing redirect url")
-                .map(|d| d.url),
-            _ => {
-                let msg = resp
-                    .message
-                    .unwrap_or_else(|| "tps token check failed".to_string());
-                bail!(msg)
+            .await
+        {
+            Ok(resp) => resp,
+            Err(error) => {
+                auth_trace("token-check request failed");
+                return Err(error);
             }
-        }
+        };
+        parse_tps_token_response(resp)
     }
 
     async fn get_otp_uri_from_tps(
         &mut self,
         method: &str,
-        url: &String,
-        token: &String,
+        url: &str,
+        token: &str,
     ) -> Result<String> {
-        log::info!("old token is: {token}");
         log::info!("please scan the QR code or visit the following link to auth corplink:\n{url}");
         match TerminalQrCode::from_bytes(url.as_bytes()) {
             Ok(qr) => qr.print(),
@@ -426,7 +486,10 @@ impl Client {
                 log::info!("press enter if you finish auth");
                 let stdin = io::stdin();
                 stdin.lines().next();
-                self.check_tps_token(token).await
+                match self.check_tps_token(token).await? {
+                    TpsTokenStatus::Authenticated(url) => Ok(url),
+                    TpsTokenStatus::Pending => bail!("QR authentication is still pending"),
+                }
             }
             _ => {
                 // TODO: add all tps login support
@@ -582,7 +645,7 @@ impl Client {
                         let url = Url::parse(&otp_uri).context("failed to parse otp uri")?;
                         for (k, v) in url.query_pairs() {
                             if k == "secret" {
-                                log::info!("got 2fa token: {}", &v);
+                                log::info!("received 2fa token");
                                 self.conf.code = Some(v.to_string());
                                 self.conf.save().await?;
                                 break;
@@ -607,6 +670,50 @@ impl Client {
         }
     }
 
+    pub async fn begin_qr_login(&mut self) -> Result<QrChallenge> {
+        let login_methods = self.get_login_method().await?;
+        let tps_methods = self.get_tps_login_method().await?;
+
+        select_qr_challenge(
+            &login_methods.login_orders,
+            &tps_methods,
+            self.conf.platform.as_deref(),
+        )
+        .context("no Feishu or OIDC QR login method is available")
+    }
+
+    pub async fn poll_qr_login(&mut self, token: &str) -> Result<QrPollStatus> {
+        match self.check_tps_token(token).await? {
+            TpsTokenStatus::Pending => {
+                auth_trace("poll result=pending");
+                Ok(QrPollStatus::Pending)
+            }
+            TpsTokenStatus::Authenticated(redirect_url) => {
+                auth_trace("poll result=authenticated");
+                let otp_uri = if redirect_url.is_empty() {
+                    self.request_otp_code().await?
+                } else {
+                    redirect_url
+                };
+                self.complete_login(&otp_uri).await?;
+                auth_trace("profile state persisted");
+                Ok(QrPollStatus::Authenticated)
+            }
+        }
+    }
+
+    pub async fn list_vpn_nodes(&mut self) -> Result<Vec<RespVpnInfo>> {
+        self.list_vpn().await
+    }
+
+    async fn complete_login(&mut self, otp_uri: &str) -> Result<()> {
+        if let Some(secret) = otp_secret_from_uri(otp_uri)? {
+            log::info!("received 2fa token");
+            self.conf.code = Some(secret);
+        }
+        self.change_state(State::Login).await
+    }
+
     // choose right login method and login
     pub async fn login(&mut self) -> Result<()> {
         if self.conf.platform.as_deref() == Some(PLATFORM_CORPLINK_V1) {
@@ -627,20 +734,10 @@ impl Client {
             let otp_uri = otp_uri?;
             if otp_uri.is_empty() {
                 log::info!("no otp code from server, will ask for 2fa code when connecting");
-                self.change_state(State::Login).await?;
+                self.complete_login(&otp_uri).await?;
                 return Ok(());
             }
-            self.change_state(State::Login).await?;
-
-            let url = Url::parse(&otp_uri).context("failed to parse otp uri")?;
-            for (k, v) in url.query_pairs() {
-                if k == "secret" {
-                    log::info!("got 2fa token: {}", &v);
-                    self.conf.code = Some(v.to_string());
-                    self.conf.save().await?;
-                    break;
-                }
-            }
+            self.complete_login(&otp_uri).await?;
 
             if let Some(code) = &self.conf.code {
                 if !code.is_empty() {
@@ -1003,11 +1100,7 @@ impl Client {
                 let offset = self.date_offset_sec / TIME_STEP as i32;
                 let raw_otp = totp_offset(code.as_slice(), offset);
                 otp = format!("{:06}", raw_otp.code);
-                log::info!(
-                    "2fa code generated: {}, {} seconds left",
-                    &otp,
-                    raw_otp.secs_left
-                );
+                log::info!("2fa code generated, {} seconds left", raw_otp.secs_left);
             }
         }
         if otp.is_empty() {
@@ -1046,6 +1139,14 @@ impl Client {
     }
 
     pub async fn connect_vpn(&mut self) -> Result<WgConf> {
+        self.connect_vpn_selected(None).await
+    }
+
+    pub async fn connect_vpn_node(&mut self, node_id: i32) -> Result<WgConf> {
+        self.connect_vpn_selected(Some(node_id)).await
+    }
+
+    async fn connect_vpn_selected(&mut self, requested_node_id: Option<i32>) -> Result<WgConf> {
         let vpn_info = self.list_vpn().await?;
 
         log::info!(
@@ -1059,13 +1160,21 @@ impl Client {
         let filtered_vpn = vpn_info
             .into_iter()
             .filter(|vpn| {
-                if let Some(server_name) = self.conf.vpn_server_name.clone() {
-                    if vpn.en_name != server_name {
-                        log::info!("skip {}, expect {}", vpn.en_name, server_name);
-                        return false;
-                    }
+                let matches = vpn_matches_selection(
+                    vpn,
+                    self.conf.vpn_server_name.as_deref(),
+                    requested_node_id,
+                );
+                if !matches {
+                    log::debug!(
+                        "skip VPN node {} (id {}), configured name {:?}, requested id {:?}",
+                        vpn.en_name,
+                        vpn.id,
+                        self.conf.vpn_server_name,
+                        requested_node_id
+                    );
                 }
-                true
+                matches
             })
             .filter(|vpn| {
                 let mode = match vpn.protocol_mode {
@@ -1413,6 +1522,27 @@ impl Client {
     }
 }
 
+fn open_private_cookie_file(path: &path::Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        options.mode(0o600);
+        let file = options
+            .open(path)
+            .with_context(|| format!("failed to open cookie file {} for writing", path.display()))?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to secure cookie file {}", path.display()))?;
+        return Ok(file);
+    }
+    #[cfg(not(unix))]
+    options
+        .open(path)
+        .with_context(|| format!("failed to open cookie file {} for writing", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1424,9 +1554,13 @@ mod tests {
     use tokio::sync::{oneshot, Barrier};
     use tokio::time::{sleep, timeout};
 
-    use super::{merge_additional_routes, resolve_additional_domains, Client, ReqwestCookieStore};
+    use super::{
+        merge_additional_routes, otp_secret_from_uri, parse_tps_token_response,
+        resolve_additional_domains, select_qr_challenge, vpn_matches_selection, Client,
+        ReqwestCookieStore, TpsTokenStatus,
+    };
     use crate::config::Config;
-    use crate::resp::RespVpnInfo;
+    use crate::resp::{Resp, RespLogin, RespTpsLoginMethod, RespVpnInfo};
     use crate::utils::apply_route_filters;
 
     async fn start_probe_server(
@@ -1481,6 +1615,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn vpn_selection_can_target_a_node_id_without_changing_default_matching() {
+        let mut first = vpn_info(1001, "first");
+        first.id = 1;
+        let mut second = vpn_info(1002, "second");
+        second.id = 2;
+
+        assert!(vpn_matches_selection(&first, None, None));
+        assert!(vpn_matches_selection(&second, None, Some(2)));
+        assert!(!vpn_matches_selection(&first, None, Some(2)));
+        assert!(vpn_matches_selection(&second, Some("second"), Some(2)));
+        assert!(!vpn_matches_selection(&second, Some("first"), Some(2)));
+    }
+
+    #[test]
+    fn qr_challenge_follows_server_order_and_configured_platform() {
+        let methods = vec![
+            RespTpsLoginMethod {
+                alias: "lark".to_string(),
+                login_url: "https://example.test/lark".to_string(),
+                token: "lark-token".to_string(),
+            },
+            RespTpsLoginMethod {
+                alias: "OIDC".to_string(),
+                login_url: "https://example.test/oidc".to_string(),
+                token: "oidc-token".to_string(),
+            },
+        ];
+        let order = vec!["lark".to_string(), "OIDC".to_string()];
+
+        let default = select_qr_challenge(&order, &methods, None).unwrap();
+        let oidc = select_qr_challenge(&order, &methods, Some("OIDC")).unwrap();
+
+        assert_eq!(default.token, "lark-token");
+        assert_eq!(oidc.token, "oidc-token");
+    }
+
+    #[test]
+    fn qr_poll_code_101_remains_pending() {
+        let status = parse_tps_token_response(Resp::<RespLogin> {
+            code: 101,
+            message: Some("waiting".to_string()),
+            data: None,
+            action: None,
+        })
+        .unwrap();
+
+        assert!(matches!(status, TpsTokenStatus::Pending));
+    }
+
+    #[test]
+    fn qr_poll_code_3040_remains_pending() {
+        let status = parse_tps_token_response(Resp::<RespLogin> {
+            code: 3040,
+            message: Some("waiting for confirmation".to_string()),
+            data: None,
+            action: None,
+        })
+        .unwrap();
+
+        assert!(matches!(status, TpsTokenStatus::Pending));
+    }
+
+    #[test]
+    fn extracts_otp_secret_from_authenticated_redirect() {
+        let secret = otp_secret_from_uri(
+            "otpauth://totp/Feilian:user?issuer=Feilian&secret=JBSWY3DPEHPK3PXP",
+        )
+        .unwrap();
+
+        assert_eq!(secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+        assert_eq!(otp_secret_from_uri("").unwrap(), None);
+    }
+
     fn test_client() -> Client {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1501,6 +1709,41 @@ mod tests {
                 .into_owned(),
         );
         Client::new(conf).unwrap()
+    }
+
+    #[test]
+    fn cookie_file_stays_next_to_profile() {
+        let client = test_client();
+        let profile_parent = std::path::Path::new(client.conf.conf_file.as_ref().unwrap())
+            .parent()
+            .unwrap();
+
+        assert_eq!(client.cookie_file.parent().unwrap(), profile_parent);
+        assert!(client
+            .cookie_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("cookies.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cookie_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let client = test_client();
+        client.save_cookie().unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&client.cookie_file)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        std::fs::remove_file(&client.cookie_file).unwrap();
     }
 
     #[tokio::test]

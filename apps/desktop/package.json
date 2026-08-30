@@ -1,0 +1,31 @@
+{
+  "name": "feilian-lite-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "build:helper": "cargo build --manifest-path ../../Cargo.toml -p feilian-helper",
+    "build:helper:release": "cargo build --manifest-path ../../Cargo.toml -p feilian-helper --release && node scripts/stage-helper.mjs release",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.37.0",
+    "@tauri-apps/api": "^2.11.1",
+    "qrcode.vue": "^3.10.0",
+    "vue": "^3.5.41"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.13.3",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/tsconfig": "^0.9.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vue-tsc": "^3.3.11"
+  }
+}

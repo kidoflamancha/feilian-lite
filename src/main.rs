@@ -1,28 +1,18 @@
-mod api;
-mod client;
-mod config;
-mod dns;
-mod qrcode;
-mod resp;
-mod state;
-mod template;
-mod totp;
-mod utils;
-mod wg;
-
 #[cfg(windows)]
 use is_elevated;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-use dns::DNSManager;
+use feilian_lite::DNSManager;
 
 use std::env;
 use std::process::exit;
 
 use anyhow::{anyhow, Context, Result};
 
-use client::Client;
-use config::{Config, WgConf};
+use feilian_lite::{
+    get_company_url, start_wg_go, start_wg_go_netstack, stop_wg_go, Client, Config, UAPIClient,
+    WgConf, PLATFORM_CORPLINK_V1,
+};
 
 fn print_usage_and_exit(name: &str, conf: &str) {
     println!("usage:\n\t{} {}", name, conf);
@@ -99,7 +89,7 @@ async fn run() -> Result<()> {
     let dns_backup_filename = conf.dns_backup_filename.clone();
 
     if conf.server.is_none() {
-        let resp = client::get_company_url(conf.company_name.as_str())
+        let resp = get_company_url(conf.company_name.as_str())
             .await
             .with_context(|| {
                 format!(
@@ -151,11 +141,17 @@ async fn run() -> Result<()> {
     }
     let wg_conf = wg_conf.ok_or_else(|| anyhow!("wg conf missing after connect loop"))?;
     let protocol = wg_conf.protocol;
-    let mut uapi = wg::UAPIClient { name: name.clone() };
+    let mut uapi = UAPIClient { name: name.clone() };
     if let Some(listen) = &socks5_listen {
         log::info!("start wg-corplink (netstack/socks5) on {}", listen);
-        wg::start_wg_go_netstack(&wg_conf, listen, &socks5_username, &socks5_password, with_wg_log)
-            .context("failed to start wg-corplink in netstack mode")?;
+        start_wg_go_netstack(
+            &wg_conf,
+            listen,
+            &socks5_username,
+            &socks5_password,
+            with_wg_log,
+        )
+        .context("failed to start wg-corplink in netstack mode")?;
         uapi.config_wg_netstack(&wg_conf)
             .await
             .context("failed to config netstack interface with uapi")?;
@@ -169,7 +165,7 @@ async fn run() -> Result<()> {
         }
     } else {
         log::info!("start wg-corplink for {}", &name);
-        wg::start_wg_go(&name, protocol, with_wg_log)
+        start_wg_go(&name, protocol, with_wg_log)
             .with_context(|| format!("failed to start wg-corplink for {}", name))?;
         uapi.config_wg(&wg_conf)
             .await
@@ -214,14 +210,14 @@ async fn run() -> Result<()> {
     };
 
     // only logout for feilian_v1
-    if platform.as_deref() == Some(config::PLATFORM_CORPLINK_V1) {
+    if platform.as_deref() == Some(PLATFORM_CORPLINK_V1) {
         log::info!("logging out current terminal...");
         if let Err(e) = c.logout().await {
             log::warn!("failed to logout: {}", e)
         };
     }
 
-    wg::stop_wg_go();
+    stop_wg_go();
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     if use_vpn_dns && !netstack_mode {

@@ -1,0 +1,14 @@
+[package]
+name = "feilian-helper-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+feilian-ipc = { path = "../feilian-ipc" }
+tokio = { version = "1.37", features = ["io-util", "net", "time"] }
+
+[dev-dependencies]
+async-trait = "0.1"
+feilian-helper = { path = "../../apps/helper" }
+tempfile = "3"
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread"] }

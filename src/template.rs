@@ -21,25 +21,10 @@ impl Template {
         }
     }
 
-    /// ```
     /// # Examples
     ///
-    /// let template = Template::new("Hi, my name is {{name}} and I'm a {{lang}} developer.");
-    ///
-    /// let mut args = HashMap::new();
-    /// args.insert("name", "Michael");
-    /// args.insert("lang", "Rust");
-    /// let s = template.render(&args);
-    ///
-    /// assert_eq!(s, "Hi, my name is Michael and I'm a Rust developer.");
-    ///
-    /// let mut args1 = HashMap::new();
-    /// args1.insert("name", "Vader");
-    /// args1.insert("lang", "Dart");
-    /// let s2 = template.render(&args1);
-    ///
-    /// assert_eq!(s2, "Hi, my name is Vader and I'm a Dart developer.");
-    /// ```
+    /// A template containing `Hi, {{name}}` renders to `Hi, Michael` when
+    /// `name` is set to `Michael`.
     pub fn render<T: Serialize>(&self, vals: T) -> String {
         self.render_named(vals)
     }
@@ -102,5 +87,23 @@ impl Template {
         }
 
         parts.join("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::Template;
+
+    #[test]
+    fn renders_named_values() {
+        let template = Template::new("Hi, my name is {{name}} and I'm a {{lang}} developer.");
+        let args = HashMap::from([("name", "Michael"), ("lang", "Rust")]);
+
+        assert_eq!(
+            template.render(&args),
+            "Hi, my name is Michael and I'm a Rust developer."
+        );
     }
 }

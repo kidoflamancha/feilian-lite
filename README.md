@@ -1,4 +1,59 @@
-# corplink-rs
+# Feilian Lite
+
+轻量级跨平台飞连桌面客户端，当前处于实现阶段。项目基于
+[PinkD/corplink-rs](https://github.com/PinkD/corplink-rs) 开发，正在将已验证的
+Rust 协议和 WireGuard 实现拆分为可复用核心、特权 tunnel helper 和 Tauri GUI。
+
+当前代码已经提供 library 入口、桌面会话状态机、不依赖终端输入的飞书扫码/OIDC
+认证接口，以及带版本控制的 helper IPC、单隧道 supervisor 和 Linux/macOS
+owner-only Unix socket 与 typed helper client。CLI 行为暂时保留用于回归验证。架构约束见
+[docs/architecture.md](docs/architecture.md)，协议说明见
+[docs/helper-protocol.md](docs/helper-protocol.md)。
+
+## 桌面端开发
+
+```bash
+cd apps/desktop
+npm install
+npm run tauri dev
+```
+
+前端类型与生产构建使用 `npm run build`，响应式视觉测试使用
+`npm run test:e2e`。仅构建桌面二进制而不生成安装包：
+
+```bash
+npm run tauri -- build --no-bundle
+```
+
+当前桌面工作台已经实现企业发现、飞书扫码/OIDC 登录、认证状态轮询、节点列表和按节点连接。
+SOCKS5 helper 在 Unix 上按需以当前用户启动；Linux 系统分流通过 `pkexec` 请求提权。断开或
+helper 启动失败时会释放服务端 VPN 会话。macOS 提权 launcher 与 Windows named pipe 尚未完成。
+
+桌面 profile 和 cookie 在 Unix 上分别以私有目录 `0700`、文件 `0600` 保存。WireGuard 私钥、
+TOTP secret 及可选密码不写入 profile，而是存入系统凭据库：Linux 使用 Secret Service，
+macOS 使用 Keychain，Windows 使用 Credential Manager。启动新版桌面客户端时，旧 profile
+中的明文秘密会先迁入系统凭据库，再从 JSON 中移除；系统凭据库不可用时不会静默生成新身份。
+
+`tauri build` 会先构建 `feilian-helper`，按目标三元组 staging，并将其作为 Tauri external
+binary 收入安装包。`tauri build --no-bundle` 仅生成可执行文件；直接测试时需保持
+`feilian-desktop` 和 `feilian-helper` 位于同一目录。
+
+当前 Linux x86_64 构建、Secret Service 迁移和 helper staging 已验证。macOS Keychain 与
+Windows Credential Manager 已配置为对应平台 backend，但完整平台发布仍分别受 macOS 提权
+launcher、Windows named-pipe transport、签名和安装器验证约束。
+
+### Linux 显示后端
+
+部分 GTK/WebKit 组合在 Wayland 下会因 DMA-BUF renderer 触发 `Error 71 (Protocol
+error)`。应用会保留当前原生 Wayland/X11 后端，并在 GTK 初始化前禁用 WebKit DMA-BUF
+renderer；用户显式设置的 `WEBKIT_DISABLE_DMABUF_RENDERER` 会被保留。需要覆盖显示后端时
+可运行：
+
+```bash
+FEILIAN_GDK_BACKEND=x11 npm --prefix apps/desktop run tauri dev
+```
+
+## 上游使用说明
 
 使用 rust 实现的 [飞连][1] 客户端，支持 Linux/Windows10/MacOS
 

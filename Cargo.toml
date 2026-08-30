@@ -1,5 +1,15 @@
+[workspace]
+members = [
+    ".",
+    "apps/desktop/src-tauri",
+    "apps/helper",
+    "crates/feilian-helper-client",
+    "crates/feilian-ipc",
+]
+resolver = "2"
+
 [package]
-name = "corplink-rs"
+name = "feilian-lite"
 version = "0.5.5"
 edition = "2021"
 

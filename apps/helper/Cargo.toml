@@ -1,0 +1,18 @@
+[package]
+name = "feilian-helper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+feilian-lite = { path = "../.." }
+feilian-ipc = { path = "../../crates/feilian-ipc" }
+sha2 = "0.10"
+tokio = { version = "1.37", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3"

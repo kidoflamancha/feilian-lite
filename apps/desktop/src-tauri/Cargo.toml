@@ -1,0 +1,37 @@
+[package]
+name = "feilian-desktop"
+version = "0.1.0"
+edition = "2021"
+authors = ["Feilian Lite Contributors"]
+description = "Lightweight cross-platform desktop client for Feilian VPN"
+
+[lib]
+name = "feilian_desktop_lib"
+crate-type = ["lib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+feilian-lite = { path = "../../.." }
+feilian-helper-client = { path = "../../../crates/feilian-helper-client" }
+feilian-ipc = { path = "../../../crates/feilian-ipc" }
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2", features = [] }
+tokio = { version = "1.37", features = ["fs", "process", "sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3"

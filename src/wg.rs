@@ -127,7 +127,19 @@ pub struct UAPIClient {
     pub name: String,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WgStats {
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+}
+
 impl UAPIClient {
+    pub fn stats(&self) -> Result<WgStats> {
+        let data = uapi(b"get=1\n\n").context("call uapi")?;
+        let response = String::from_utf8(data).context("failed to decode uapi response")?;
+        parse_stats(&response)
+    }
+
     pub async fn config_wg(&mut self, conf: &config::WgConf) -> Result<()> {
         let mut buff = String::from("set=1\n");
         // standard wg-go uapi operations
@@ -287,5 +299,57 @@ impl UAPIClient {
                 }
             }
         }
+    }
+}
+
+fn parse_stats(response: &str) -> Result<WgStats> {
+    let mut stats = WgStats::default();
+    let mut success = false;
+    for line in response.lines() {
+        if let Some(value) = line.strip_prefix("tx_bytes=") {
+            stats.tx_bytes = stats.tx_bytes.saturating_add(
+                value
+                    .parse::<u64>()
+                    .context("invalid tx_bytes in uapi response")?,
+            );
+        } else if let Some(value) = line.strip_prefix("rx_bytes=") {
+            stats.rx_bytes = stats.rx_bytes.saturating_add(
+                value
+                    .parse::<u64>()
+                    .context("invalid rx_bytes in uapi response")?,
+            );
+        } else if line == "errno=0" {
+            success = true;
+        } else if line.starts_with("errno=") {
+            return Err(anyhow!("uapi returns unexpected result: {line}"));
+        }
+    }
+    if !success {
+        return Err(anyhow!("uapi response is missing errno=0"));
+    }
+    Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_stats, WgStats};
+
+    #[test]
+    fn parses_and_sums_wireguard_peer_stats() {
+        let response = "tx_bytes=10\nrx_bytes=20\ntx_bytes=5\nrx_bytes=7\nerrno=0\n\n";
+
+        assert_eq!(
+            parse_stats(response).unwrap(),
+            WgStats {
+                tx_bytes: 15,
+                rx_bytes: 27,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unsuccessful_uapi_stats() {
+        assert!(parse_stats("errno=5\n\n").is_err());
+        assert!(parse_stats("tx_bytes=10\n").is_err());
     }
 }
