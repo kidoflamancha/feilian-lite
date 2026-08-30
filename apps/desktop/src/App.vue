@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity,
+  BadgeCheck,
   Building2,
   Cable,
   ChevronDown,
@@ -16,6 +17,7 @@ import {
   ShieldCheck,
   LogOut,
   MapPin,
+  Radio,
   WifiOff,
 } from '@lucide/vue'
 
@@ -30,7 +32,9 @@ import {
   type HelperSnapshot,
 } from './api'
 
-const mode = ref<HelperMode>('system_split')
+const savedMode = window.localStorage.getItem('feilian.helper-mode')
+const mode = ref<HelperMode>(savedMode === 'socks5' ? 'socks5' : 'system_split')
+const activeView = ref<'connection' | 'diagnostics' | 'settings'>('connection')
 const snapshot = ref<HelperSnapshot | null>(null)
 const busy = ref(false)
 const auth = ref<AuthSnapshot | null>(null)
@@ -50,6 +54,14 @@ const selectedNode = computed(() =>
 const canConnect = computed(
   () => Boolean(auth.value?.authenticated && selectedNode.value?.available) && !busy.value && !isRunning.value,
 )
+const pageTitle = computed(() => {
+  const pages = {
+    connection: { eyebrow: 'CONNECTION', title: '连接控制台' },
+    diagnostics: { eyebrow: 'DIAGNOSTICS', title: '运行诊断' },
+    settings: { eyebrow: 'SETTINGS', title: '客户端设置' },
+  }
+  return pages[activeView.value]
+})
 const statusLabel = computed(() => {
   if (!snapshot.value?.reachable) return '服务未启动'
   const labels = {
@@ -215,9 +227,14 @@ async function refresh() {
   }
 }
 
+async function refreshAll() {
+  await Promise.all([refresh(), refreshNodes()])
+}
+
 async function changeMode(nextMode: HelperMode) {
   if (isRunning.value) return
   mode.value = nextMode
+  window.localStorage.setItem('feilian.helper-mode', nextMode)
   await refresh()
 }
 
@@ -287,9 +304,9 @@ onUnmounted(() => {
       </div>
 
       <nav aria-label="主导航">
-        <button class="nav-item active" type="button"><Gauge :size="18" />连接</button>
-        <button class="nav-item" type="button"><Activity :size="18" />诊断</button>
-        <button class="nav-item" type="button"><Settings :size="18" />设置</button>
+        <button class="nav-item" :class="{ active: activeView === 'connection' }" :aria-current="activeView === 'connection' ? 'page' : undefined" type="button" @click="activeView = 'connection'"><Gauge :size="18" />连接</button>
+        <button class="nav-item" :class="{ active: activeView === 'diagnostics' }" :aria-current="activeView === 'diagnostics' ? 'page' : undefined" type="button" @click="activeView = 'diagnostics'"><Activity :size="18" />诊断</button>
+        <button class="nav-item" :class="{ active: activeView === 'settings' }" :aria-current="activeView === 'settings' ? 'page' : undefined" type="button" @click="activeView = 'settings'"><Settings :size="18" />设置</button>
       </nav>
 
       <div class="sidebar-foot">
@@ -302,8 +319,8 @@ onUnmounted(() => {
     <section class="workspace">
       <header class="topbar">
         <div>
-          <p class="eyebrow">CONNECTION</p>
-          <h1>连接控制台</h1>
+          <p class="eyebrow">{{ pageTitle.eyebrow }}</p>
+          <h1>{{ pageTitle.title }}</h1>
         </div>
         <div class="top-actions">
           <div v-if="auth?.authenticated" class="identity-pill">
@@ -311,12 +328,13 @@ onUnmounted(() => {
             <span>{{ auth.company_name }}</span>
             <button type="button" title="退出企业" @click="resetAuth"><LogOut :size="14" /></button>
           </div>
-          <button class="icon-button" type="button" title="刷新状态" :disabled="busy" @click="refresh">
+          <button class="icon-button" type="button" title="刷新状态" :disabled="busy || authBusy" @click="refreshAll">
             <RefreshCw :size="18" />
           </button>
         </div>
       </header>
 
+      <template v-if="activeView === 'connection'">
       <section class="connection-band" :class="{ connected: isRunning }">
         <div class="status-copy">
           <span class="status-icon">
@@ -452,6 +470,89 @@ onUnmounted(() => {
           <RefreshCw :size="16" />尝试清理
         </button>
       </section>
+      </template>
+
+      <template v-else-if="activeView === 'diagnostics'">
+        <section class="diagnostics-grid">
+          <div class="diagnostic-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">HEALTH</p><h2>组件状态</h2></div>
+              <Activity :size="17" />
+            </div>
+            <div class="status-list">
+              <div>
+                <span><Radio :size="15" />Helper 通信</span>
+                <strong :class="snapshot?.reachable ? 'healthy' : 'warning'">{{ snapshot?.reachable ? '正常' : '不可用' }}</strong>
+              </div>
+              <div>
+                <span><BadgeCheck :size="15" />认证会话</span>
+                <strong :class="auth?.authenticated ? 'healthy' : 'warning'">{{ auth?.authenticated ? '已认证' : '未认证' }}</strong>
+              </div>
+              <div>
+                <span><Cable :size="15" />隧道状态</span>
+                <strong>{{ statusLabel }}</strong>
+              </div>
+              <div>
+                <span><Server :size="15" />可用节点</span>
+                <strong>{{ auth?.nodes.filter((node) => node.available).length ?? 0 }} / {{ auth?.nodes.length ?? 0 }}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="diagnostic-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">SESSION</p><h2>当前会话</h2></div>
+              <Gauge :size="17" />
+            </div>
+            <div class="status-list">
+              <div><span>连接模式</span><strong>{{ mode === 'system_split' ? '系统分流' : 'SOCKS5' }}</strong></div>
+              <div><span>当前节点</span><strong>{{ snapshot?.active?.node_name ?? selectedNode?.name ?? '--' }}</strong></div>
+              <div><span>下载流量</span><strong>{{ formatBytes(snapshot?.stats.rx_bytes) }}</strong></div>
+              <div><span>上传流量</span><strong>{{ formatBytes(snapshot?.stats.tx_bytes) }}</strong></div>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="operationError || snapshot?.error" class="notice-band diagnostics-notice">
+          <div><strong>最近错误</strong><span>{{ operationError ?? snapshot?.error?.message }}</span></div>
+        </section>
+
+        <div class="view-actions">
+          <button type="button" :disabled="busy || authBusy" @click="refreshAll"><RefreshCw :size="16" />重新检测</button>
+          <button type="button" :disabled="busy || isRunning" @click="cleanup"><ShieldCheck :size="16" />清理残留状态</button>
+        </div>
+      </template>
+
+      <template v-else>
+        <section class="settings-stack">
+          <div class="settings-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">CONNECTION MODE</p><h2>默认连接模式</h2></div>
+              <Network :size="17" />
+            </div>
+            <div class="segmented" role="tablist" aria-label="设置连接模式">
+              <button type="button" :disabled="isRunning" :class="{ selected: mode === 'system_split' }" @click="changeMode('system_split')">
+                <Network :size="18" /><span><strong>系统分流</strong><small>企业网段进入隧道</small></span>
+              </button>
+              <button type="button" :disabled="isRunning" :class="{ selected: mode === 'socks5' }" @click="changeMode('socks5')">
+                <Globe2 :size="18" /><span><strong>SOCKS5</strong><small>本地 127.0.0.1:1080</small></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-panel settings-row">
+            <span class="setting-icon"><ShieldCheck :size="20" /></span>
+            <div><strong>系统凭据库</strong><span>WireGuard 私钥与认证密钥由操作系统安全存储保护</span></div>
+            <b class="setting-state">已启用</b>
+          </div>
+
+          <div class="settings-panel settings-row">
+            <span class="setting-icon"><Building2 :size="20" /></span>
+            <div><strong>{{ auth?.company_name ?? '未连接企业' }}</strong><span>{{ auth?.authenticated ? `认证方式：${auth.platform === 'oidc' ? 'OIDC' : '飞书'}` : '需要完成企业认证' }}</span></div>
+            <button class="secondary-button danger-text" type="button" :disabled="!auth?.configured || isRunning || authBusy" @click="resetAuth"><LogOut :size="15" />退出企业</button>
+          </div>
+        </section>
+      </template>
     </section>
 
     <AuthFlow

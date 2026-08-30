@@ -63,6 +63,62 @@ test('QR polling recovers after a transient backend error', async ({ page }) => 
   await expect(page.getByLabel('选择 VPN 节点')).toContainText('上海节点')
 })
 
+test('diagnostics and settings navigation open functional views', async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 560 })
+  await page.addInitScript(() => {
+    const auth = {
+      configured: true,
+      authenticated: true,
+      company_code: 'acme',
+      company_name: 'Acme Technology',
+      platform: 'feishu',
+      challenge: null,
+      nodes: [],
+    }
+    const helper = {
+      mode: 'system_split',
+      reachable: true,
+      state: 'idle',
+      active: null,
+      stats: { tx_bytes: 1024, rx_bytes: 2048 },
+      error: null,
+    }
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          if (command.startsWith('auth_')) return auth
+          if (command.startsWith('helper_')) return helper
+          throw new Error(`Unexpected command: ${command}`)
+        },
+      },
+    })
+  })
+
+  await page.goto('/')
+  await page.getByRole('button', { name: '诊断' }).click()
+  await expect(page.getByRole('heading', { name: '运行诊断' })).toBeVisible()
+  await expect(page.getByText('Helper 通信')).toBeVisible()
+  await page.screenshot({ path: 'test-results/dashboard-diagnostics.png', fullPage: true })
+
+  await page.getByRole('button', { name: '设置' }).click()
+  await expect(page.getByRole('heading', { name: '客户端设置' })).toBeVisible()
+  await expect(page.getByText('系统凭据库')).toBeVisible()
+  await page.getByRole('button', { name: /SOCKS5/ }).click()
+  await expect(page.getByRole('button', { name: /SOCKS5/ })).toHaveClass(/selected/)
+  await page.reload()
+  await page.getByRole('button', { name: '设置' }).click()
+  await expect(page.getByRole('button', { name: /SOCKS5/ })).toHaveClass(/selected/)
+  await page.screenshot({ path: 'test-results/dashboard-settings.png', fullPage: true })
+
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  )
+  expect(hasHorizontalOverflow).toBe(false)
+
+  await page.getByRole('button', { name: '连接' }).click()
+  await expect(page.getByRole('heading', { name: '连接控制台' })).toBeVisible()
+})
+
 const scenarios = [
   { name: 'configure', width: 1080, height: 720, auth: 'configure' },
   { name: 'qr', width: 900, height: 680, auth: 'qr' },
