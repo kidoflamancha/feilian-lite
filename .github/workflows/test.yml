@@ -121,11 +121,26 @@ jobs:
         run: cargo test -p feilian-helper-client
       - name: Compile desktop tests
         run: cargo test -p feilian-desktop --no-run
-      - name: Test desktop crate
+      - name: Stage desktop test runtime
+        run: Copy-Item -Path target/debug/*.dll -Destination target/debug/deps -Force
+      - name: Test desktop controller
         env:
           RUST_BACKTRACE: 1
-        run: |
-          Copy-Item -Path target/debug/*.dll -Destination target/debug/deps -Force
-          cargo test -p feilian-desktop
+        run: cargo test -p feilian-desktop --lib controller::tests
+      - name: Test desktop launcher
+        if: always()
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p feilian-desktop --lib launcher::tests
+      - name: Test desktop secret store
+        if: always()
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p feilian-desktop --lib secret_store::tests
+      - name: Test desktop binaries
+        if: always()
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p feilian-desktop --bins
       - name: Build Windows desktop
         run: npm --prefix apps/desktop run tauri -- build --no-bundle
