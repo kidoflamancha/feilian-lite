@@ -38,7 +38,7 @@ test('QR polling recovers after a transient backend error', async ({ page }) => 
               ...pendingAuth,
               authenticated: true,
               challenge: null,
-              nodes: [{ id: 1, name: 'Shanghai-01', protocol: 'udp' }],
+              nodes: [{ id: 1, name: '上海节点', english_name: 'Shanghai-01', address: '192.0.2.1:51820', protocol: 'udp', latency_ms: 36, available: true }],
             }
           }
           if (command.startsWith('helper_')) {
@@ -60,7 +60,7 @@ test('QR polling recovers after a transient backend error', async ({ page }) => 
   await page.goto('/')
   await expect(page.getByText('temporary network failure')).toBeVisible({ timeout: 4_000 })
   await expect(page.getByRole('heading', { name: '等待飞书确认' })).toBeHidden({ timeout: 5_000 })
-  await expect(page.getByRole('combobox')).toHaveValue('1')
+  await expect(page.getByLabel('选择 VPN 节点')).toContainText('上海节点')
 })
 
 const scenarios = [
@@ -94,8 +94,9 @@ for (const scenario of scenarios) {
         nodes:
           authState === 'authenticated'
             ? [
-                { id: 1, name: 'Shanghai-01', protocol: 'udp' },
-                { id: 2, name: 'Beijing-02', protocol: 'tcp' },
+                { id: 1, name: '上海节点', english_name: 'Shanghai-01', address: '192.0.2.1:51820', protocol: 'udp', latency_ms: 36, available: true },
+                { id: 2, name: '北京节点', english_name: 'Beijing-02', address: '192.0.2.2:443', protocol: 'tcp', latency_ms: 128, available: true },
+                { id: 3, name: '备用节点', english_name: null, address: '192.0.2.3:51820', protocol: 'udp', latency_ms: null, available: false },
               ]
             : [],
       }
@@ -112,7 +113,7 @@ for (const scenario of scenarios) {
                 reachable: true,
                 state: 'running',
                 active: {
-                  node_name: 'Shanghai-01',
+                  node_name: '上海节点',
                   interface_name: 'feilian-lite',
                   mode: 'system_split',
                   address: '10.0.0.2/32',
@@ -139,9 +140,19 @@ for (const scenario of scenarios) {
       await expect(page.locator('.qr-frame > svg')).toBeVisible()
     } else {
       await expect(page.getByText('Acme Technology')).toBeVisible()
-      const nodeMenu = page.getByRole('combobox')
-      await expect(nodeMenu).toHaveValue('1')
-      await expect(nodeMenu.locator('option:checked')).toHaveText('Shanghai-01 · UDP')
+      const nodePicker = page.getByLabel('选择 VPN 节点')
+      await expect(nodePicker).toContainText('上海节点')
+      await expect(nodePicker).toContainText('Shanghai-01')
+      await expect(nodePicker).toContainText('192.0.2.1:51820')
+      await expect(nodePicker).toContainText('36 ms')
+      await nodePicker.click()
+      const beijingNode = page.getByRole('option', { name: /北京节点.*Beijing-02.*192\.0\.2\.2:443.*128 ms/ })
+      await expect(beijingNode).toBeVisible()
+      await expect(page.getByRole('option', { name: /备用节点.*不可达/ })).toBeDisabled()
+      await page.screenshot({ path: 'test-results/dashboard-node-picker-open.png', fullPage: true })
+      await beijingNode.click()
+      await expect(nodePicker).toContainText('北京节点')
+      await expect(nodePicker).toContainText('128 ms')
       await page.locator('.power-button').getByText('连接', { exact: true }).click()
       await expect(page.getByRole('button', { name: '断开连接' })).toBeVisible()
       await expect(page.getByRole('button', { name: /系统分流/ })).toBeDisabled()
@@ -153,7 +164,7 @@ for (const scenario of scenarios) {
           }
         ).__COMMANDS__.find((call) => call.command === 'helper_connect'),
       )
-      expect(connectCall?.args.nodeId).toBe(1)
+      expect(connectCall?.args.nodeId).toBe(2)
     }
 
     const hasHorizontalOverflow = await page.evaluate(

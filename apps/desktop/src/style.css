@@ -70,14 +70,39 @@ h2 { font-size: 16px; }
 .segmented span, .segmented strong, .segmented small { display: block; }
 .segmented strong { color: var(--ink); font-size: 13px; }
 .segmented small { margin-top: 4px; font-size: 10px; color: var(--muted); }
-.node-row { min-height: 60px; margin-top: 14px; padding: 10px 13px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 11px; color: var(--muted); }
+.node-row { min-height: 76px; margin-top: 14px; padding: 10px 13px; border-top: 1px solid var(--line); display: flex; align-items: flex-start; gap: 11px; color: var(--muted); }
+.node-row > svg { margin-top: 21px; flex: 0 0 auto; }
 .node-row label { min-width: 0; flex: 1; }
 .node-row span, .node-row strong { display: block; }
 .node-row span { font-size: 10px; }
 .node-row strong { margin-top: 3px; font-size: 13px; color: var(--ink); }
-.node-row select { width: 100%; height: 28px; margin-top: 2px; padding: 0 24px 0 0; border: 0; color: var(--ink); background: transparent; font-size: 13px; font-weight: 650; outline: 0; cursor: pointer; }
-.node-row select:disabled { color: #89928e; cursor: not-allowed; }
-.node-row .latency { margin-left: auto; color: var(--blue); font-family: monospace; }
+.node-picker { position: relative; margin-top: 3px; }
+.node-picker summary { min-height: 48px; padding: 5px 8px 5px 0; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; color: var(--ink); cursor: pointer; list-style: none; }
+.node-picker summary::-webkit-details-marker { display: none; }
+.node-picker.disabled summary { color: #89928e; cursor: not-allowed; }
+.selected-node-copy { min-width: 0; }
+.selected-node-copy strong, .selected-node-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-node-copy small { margin-top: 4px; color: var(--muted); font: 500 10px "IBM Plex Mono", monospace; }
+.node-summary-status, .node-option-status { display: flex !important; align-items: flex-end; flex-direction: column; gap: 5px; }
+.node-summary-status b, .node-option-status b { padding: 2px 5px; border-radius: 3px; color: #315447; background: #e2ece7; font: 700 9px "IBM Plex Mono", monospace; }
+.node-summary-status em, .node-option-status em { font: 600 10px "IBM Plex Mono", monospace; font-style: normal; white-space: nowrap; }
+.node-summary-status em.fast, .node-option-status em.fast { color: var(--green); }
+.node-summary-status em.medium, .node-option-status em.medium { color: var(--amber); }
+.node-summary-status em.slow, .node-option-status em.slow { color: var(--red); }
+.node-summary-status em.unavailable, .node-option-status em.unavailable { color: var(--muted); }
+.node-chevron { transition: transform .16s ease; }
+.node-picker[open] .node-chevron { transform: rotate(180deg); }
+.node-menu { position: absolute; z-index: 8; top: calc(100% + 5px); left: -42px; right: 0; max-height: 286px; padding: 5px; overflow-y: auto; border: 1px solid #bfc8c3; border-radius: 6px; background: #fff; box-shadow: 0 14px 34px rgba(15, 28, 22, .18); }
+.node-menu button { width: 100%; min-height: 68px; padding: 9px 10px; border: 0; border-bottom: 1px solid #e7ebe8; display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
+.node-menu button:last-of-type { border-bottom: 0; }
+.node-menu button:hover, .node-menu button[aria-selected="true"] { background: #edf5f1; }
+.node-menu button:disabled { opacity: .55; cursor: not-allowed; }
+.node-identity { min-width: 0; }
+.node-identity strong, .node-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-identity small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.node-identity > span { margin-top: 7px; display: flex; align-items: center; gap: 4px; color: #7a8580; font: 500 9px "IBM Plex Mono", monospace; }
+.node-option-status { flex: 0 0 auto; }
+.node-menu p { margin: 0; padding: 22px 10px; color: var(--muted); font-size: 11px; text-align: center; }
 .metrics { display: grid; margin-top: 22px; border-top: 1px solid var(--line); }
 .metrics div { min-height: 60px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .metrics span { color: var(--muted); font-size: 12px; }

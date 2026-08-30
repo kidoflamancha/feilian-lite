@@ -7,8 +7,8 @@ use feilian_ipc::{
     TunnelStats, TunnelStatus,
 };
 use feilian_lite::{
-    get_company_url, Client, Config, QrChallenge, QrPollStatus, WgConf, PLATFORM_LARK,
-    PLATFORM_OIDC,
+    get_company_url, Client, Config, QrChallenge, QrPollStatus, VpnNode, WgConf,
+    PLATFORM_LARK, PLATFORM_OIDC,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -510,7 +510,43 @@ impl From<&QrChallenge> for DesktopQrChallenge {
 pub struct AuthNode {
     pub id: i32,
     pub name: String,
+    pub english_name: Option<String>,
+    pub address: String,
     pub protocol: &'static str,
+    pub latency_ms: Option<i64>,
+    pub available: bool,
+}
+
+impl From<VpnNode> for AuthNode {
+    fn from(node: VpnNode) -> Self {
+        let name = if node.name.trim().is_empty() {
+            node.en_name.clone()
+        } else {
+            node.name.trim().to_string()
+        };
+        let english_name = (!node.en_name.trim().is_empty() && node.en_name.trim() != name)
+            .then(|| node.en_name.trim().to_string());
+        let protocol = match node.protocol_mode {
+            1 => "tcp",
+            2 => "udp",
+            _ => "unknown",
+        };
+        let host = if node.ip.contains(':') {
+            format!("[{}]", node.ip)
+        } else {
+            node.ip
+        };
+
+        Self {
+            id: node.id,
+            name,
+            english_name,
+            address: format!("{host}:{}", node.vpn_port),
+            protocol,
+            latency_ms: node.latency_ms,
+            available: node.latency_ms.is_some() && protocol != "unknown",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -597,20 +633,7 @@ async fn load_nodes(client: &mut Client) -> Result<Vec<AuthNode>, ControllerErro
     client
         .list_vpn_nodes()
         .await
-        .map(|nodes| {
-            nodes
-                .into_iter()
-                .map(|node| AuthNode {
-                    id: node.id,
-                    name: node.en_name,
-                    protocol: if node.protocol_mode == 1 {
-                        "tcp"
-                    } else {
-                        "udp"
-                    },
-                })
-                .collect()
-        })
+        .map(|nodes| nodes.into_iter().map(AuthNode::from).collect())
         .map_err(|error| ControllerError::new("node_list_failed", error.to_string(), true))
 }
 
@@ -945,5 +968,26 @@ mod tests {
 
         assert!(spec.routes.is_empty());
         assert!(matches!(spec.mode, IpcTunnelMode::Socks5 { .. }));
+    }
+
+    #[test]
+    fn desktop_node_exposes_names_endpoint_latency_and_availability() {
+        let node = AuthNode::from(VpnNode {
+            id: 7,
+            name: "上海节点".to_string(),
+            en_name: "Shanghai-01".to_string(),
+            ip: "2001:db8::7".to_string(),
+            api_port: 443,
+            vpn_port: 51820,
+            protocol_mode: 2,
+            latency_ms: Some(36),
+        });
+
+        assert_eq!(node.name, "上海节点");
+        assert_eq!(node.english_name.as_deref(), Some("Shanghai-01"));
+        assert_eq!(node.address, "[2001:db8::7]:51820");
+        assert_eq!(node.protocol, "udp");
+        assert_eq!(node.latency_ms, Some(36));
+        assert!(node.available);
     }
 }

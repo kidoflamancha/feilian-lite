@@ -11,7 +11,7 @@ mod totp;
 mod utils;
 mod wg;
 
-pub use client::{get_company_url, Client};
+pub use client::{get_company_url, Client, VpnNode};
 pub use config::{
     Config, RouteMode, WgConf, PLATFORM_CORPLINK_V1, PLATFORM_LARK, PLATFORM_OIDC,
 };

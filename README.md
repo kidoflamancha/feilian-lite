@@ -29,6 +29,9 @@ npm run tauri -- build --no-bundle
 SOCKS5 helper 在 Unix 上按需以当前用户启动；Linux 系统分流通过 `pkexec` 请求提权。断开或
 helper 启动失败时会释放服务端 VPN 会话。macOS 提权 launcher 与 Windows named pipe 尚未完成。
 
+节点选择器展示服务端中英文名称、VPN endpoint、传输协议和实时延迟。延迟探测并发执行且
+单节点最多等待 3 秒；不可达节点仍会显示，但在刷新恢复前不可选择。
+
 桌面 profile 和 cookie 在 Unix 上分别以私有目录 `0700`、文件 `0600` 保存。WireGuard 私钥、
 TOTP secret 及可选密码不写入 profile，而是存入系统凭据库：Linux 使用 Secret Service，
 macOS 使用 Keychain，Windows 使用 Credential Manager。启动新版桌面客户端时，旧 profile

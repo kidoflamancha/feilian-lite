@@ -4,6 +4,7 @@ import {
   Activity,
   Building2,
   Cable,
+  ChevronDown,
   CircleHelp,
   Gauge,
   Globe2,
@@ -14,6 +15,7 @@ import {
   Settings,
   ShieldCheck,
   LogOut,
+  MapPin,
   WifiOff,
 } from '@lucide/vue'
 
@@ -22,6 +24,7 @@ import {
   authApi,
   helperApi,
   type AuthConfiguration,
+  type AuthNode,
   type AuthSnapshot,
   type HelperMode,
   type HelperSnapshot,
@@ -35,13 +38,17 @@ const authBusy = ref(false)
 const authError = ref<string | null>(null)
 const operationError = ref<string | null>(null)
 const selectedNodeId = ref<number | null>(null)
+const nodePicker = ref<HTMLDetailsElement | null>(null)
 let refreshTimer: number | undefined
 let authPollTimer: number | undefined
 let authPolling = false
 
 const isRunning = computed(() => snapshot.value?.state === 'running')
+const selectedNode = computed(() =>
+  auth.value?.nodes.find((node) => node.id === selectedNodeId.value),
+)
 const canConnect = computed(
-  () => Boolean(auth.value?.authenticated && selectedNodeId.value) && !busy.value && !isRunning.value,
+  () => Boolean(auth.value?.authenticated && selectedNode.value?.available) && !busy.value && !isRunning.value,
 )
 const statusLabel = computed(() => {
   if (!snapshot.value?.reachable) return '服务未启动'
@@ -62,10 +69,6 @@ const statusDetail = computed(() => {
   return snapshot.value?.error?.message ?? '选择企业节点后即可建立安全连接'
 })
 
-const selectedNode = computed(() =>
-  auth.value?.nodes.find((node) => node.id === selectedNodeId.value),
-)
-
 function errorMessage(error: unknown) {
   if (typeof error === 'object' && error && 'message' in error) {
     const message = String(error.message)
@@ -76,8 +79,8 @@ function errorMessage(error: unknown) {
 
 function applyAuth(next: AuthSnapshot) {
   auth.value = next
-  if (!selectedNodeId.value && next.nodes.length > 0) {
-    selectedNodeId.value = next.nodes[0].id
+  if (!next.nodes.some((node) => node.id === selectedNodeId.value && node.available)) {
+    selectedNodeId.value = next.nodes.find((node) => node.available)?.id ?? null
   }
   if (next.authenticated || !next.challenge) {
     window.clearInterval(authPollTimer)
@@ -85,6 +88,28 @@ function applyAuth(next: AuthSnapshot) {
   } else if (!authPollTimer) {
     authPollTimer = window.setInterval(pollQr, 2000)
   }
+}
+
+function latencyLabel(node: AuthNode) {
+  return node.latency_ms === null ? '不可达' : `${node.latency_ms} ms`
+}
+
+function latencyClass(node: AuthNode) {
+  if (node.latency_ms === null) return 'unavailable'
+  if (node.latency_ms < 80) return 'fast'
+  if (node.latency_ms < 180) return 'medium'
+  return 'slow'
+}
+
+function selectNode(node: AuthNode) {
+  if (!node.available || isRunning.value) return
+  selectedNodeId.value = node.id
+  if (nodePicker.value) nodePicker.value.open = false
+}
+
+function handleNodePickerToggle(event: Event) {
+  const details = event.currentTarget as HTMLDetailsElement
+  if (details.open && auth.value?.authenticated && !authBusy.value) void refreshNodes()
 }
 
 async function loadAuth() {
@@ -352,14 +377,53 @@ onUnmounted(() => {
             <Server :size="18" />
             <label>
               <span>当前节点</span>
-              <select v-model="selectedNodeId" :disabled="!auth?.authenticated" @focus="refreshNodes">
-                <option :value="null">{{ auth?.authenticated ? '选择节点' : '登录后可用' }}</option>
-                <option v-for="node in auth?.nodes" :key="node.id" :value="node.id">
-                  {{ node.name }} · {{ node.protocol.toUpperCase() }}
-                </option>
-              </select>
+              <details
+                ref="nodePicker"
+                class="node-picker"
+                :class="{ disabled: !auth?.authenticated || isRunning }"
+                @toggle="handleNodePickerToggle"
+              >
+                <summary
+                  aria-label="选择 VPN 节点"
+                  @click="(!auth?.authenticated || isRunning) && $event.preventDefault()"
+                >
+                  <span class="selected-node-copy">
+                    <strong>{{ selectedNode?.name ?? (auth?.authenticated ? '选择节点' : '登录后可用') }}</strong>
+                    <small v-if="selectedNode">
+                      {{ selectedNode.english_name ? `${selectedNode.english_name} · ` : '' }}{{ selectedNode.address }}
+                    </small>
+                  </span>
+                  <span v-if="selectedNode" class="node-summary-status">
+                    <b>{{ selectedNode.protocol.toUpperCase() }}</b>
+                    <em :class="latencyClass(selectedNode)">{{ latencyLabel(selectedNode) }}</em>
+                  </span>
+                  <RefreshCw v-if="authBusy" class="spin" :size="14" />
+                  <ChevronDown v-else class="node-chevron" :size="16" />
+                </summary>
+                <div class="node-menu" role="listbox" aria-label="VPN 节点列表">
+                  <button
+                    v-for="node in auth?.nodes"
+                    :key="node.id"
+                    type="button"
+                    role="option"
+                    :aria-selected="node.id === selectedNodeId"
+                    :disabled="!node.available || isRunning"
+                    @click="selectNode(node)"
+                  >
+                    <span class="node-identity">
+                      <strong>{{ node.name }}</strong>
+                      <small v-if="node.english_name">{{ node.english_name }}</small>
+                      <span><MapPin :size="12" />{{ node.address }}</span>
+                    </span>
+                    <span class="node-option-status">
+                      <b>{{ node.protocol.toUpperCase() }}</b>
+                      <em :class="latencyClass(node)">{{ latencyLabel(node) }}</em>
+                    </span>
+                  </button>
+                  <p v-if="!auth?.nodes.length">暂无可用节点</p>
+                </div>
+              </details>
             </label>
-            <span class="latency">{{ selectedNode?.protocol?.toUpperCase() ?? '--' }}</span>
           </div>
         </div>
 

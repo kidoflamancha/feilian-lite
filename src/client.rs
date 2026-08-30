@@ -32,6 +32,7 @@ use crate::totp::{totp_offset, TIME_STEP};
 use crate::utils;
 
 const COOKIE_FILE_SUFFIX: &str = "cookies.json";
+const NODE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 fn auth_trace(event: &str) {
     if std::env::var("FEILIAN_AUTH_TRACE").as_deref() == Ok("1") {
@@ -152,6 +153,18 @@ struct VpnProbeResponse {
 struct SelectedVpn {
     vpn: RespVpnInfo,
     set_cookie_headers: Vec<header::HeaderValue>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VpnNode {
+    pub id: i32,
+    pub name: String,
+    pub en_name: String,
+    pub ip: String,
+    pub api_port: u16,
+    pub vpn_port: u16,
+    pub protocol_mode: i32,
+    pub latency_ms: Option<i64>,
 }
 
 enum TpsTokenStatus {
@@ -702,8 +715,9 @@ impl Client {
         }
     }
 
-    pub async fn list_vpn_nodes(&mut self) -> Result<Vec<RespVpnInfo>> {
-        self.list_vpn().await
+    pub async fn list_vpn_nodes(&mut self) -> Result<Vec<VpnNode>> {
+        let nodes = self.list_vpn().await?;
+        Ok(self.probe_vpn_nodes(nodes).await)
     }
 
     async fn complete_login(&mut self, otp_uri: &str) -> Result<()> {
@@ -929,6 +943,42 @@ impl Client {
             }
         }
         fastest.map(|(_, _, vpn)| vpn)
+    }
+
+    async fn probe_vpn_nodes(&self, vpn_info: Vec<RespVpnInfo>) -> Vec<VpnNode> {
+        let mut results = std::iter::repeat_with(|| None)
+            .take(vpn_info.len())
+            .collect::<Vec<_>>();
+        let mut probes = vpn_info
+            .into_iter()
+            .enumerate()
+            .map(|(index, vpn)| async move {
+                let latency_ms = tokio::time::timeout(
+                    NODE_PROBE_TIMEOUT,
+                    self.ping_vpn(&vpn.ip, vpn.api_port),
+                )
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .map(|response| response.latency_ms);
+                (index, vpn, latency_ms)
+            })
+            .collect::<FuturesUnordered<_>>();
+
+        while let Some((index, vpn, latency_ms)) = probes.next().await {
+            results[index] = Some(VpnNode {
+                id: vpn.id,
+                name: vpn.name,
+                en_name: vpn.en_name,
+                ip: vpn.ip,
+                api_port: vpn.api_port,
+                vpn_port: vpn.vpn_port,
+                protocol_mode: vpn.protocol_mode,
+                latency_ms,
+            });
+        }
+
+        results.into_iter().flatten().collect()
     }
 
     async fn get_first_available_vpn(&self, vpn_info: Vec<RespVpnInfo>) -> Option<SelectedVpn> {
@@ -1832,6 +1882,52 @@ mod tests {
             .to_str()
             .unwrap()
             .starts_with("vpn_session=fast"));
+        slow_request.await.unwrap();
+        fast_request.await.unwrap();
+        slow_task.await.unwrap();
+        fast_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn node_probe_reports_latency_and_retains_unreachable_nodes_in_order() {
+        let barrier = Arc::new(Barrier::new(3));
+        let (slow_port, slow_request, slow_task) =
+            start_probe_server(Arc::clone(&barrier), Duration::from_millis(75), "slow").await;
+        let (fast_port, fast_request, fast_task) =
+            start_probe_server(Arc::clone(&barrier), Duration::ZERO, "fast").await;
+        let unavailable_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable_port = unavailable_listener.local_addr().unwrap().port();
+        drop(unavailable_listener);
+
+        let client = test_client();
+        let mut slow = vpn_info(slow_port, "slow");
+        slow.id = 1;
+        slow.name = "慢速节点".to_string();
+        let mut unavailable = vpn_info(unavailable_port, "unavailable");
+        unavailable.id = 2;
+        let mut fast = vpn_info(fast_port, "fast");
+        fast.id = 3;
+
+        let nodes = timeout(Duration::from_secs(5), async {
+            let (nodes, _) = tokio::join!(
+                client.probe_vpn_nodes(vec![slow, unavailable, fast]),
+                barrier.wait()
+            );
+            nodes
+        })
+        .await
+        .expect("VPN node probes did not run concurrently");
+
+        assert_eq!(
+            nodes.iter().map(|node| node.id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(nodes[0].name, "慢速节点");
+        assert!(nodes[0].latency_ms.is_some());
+        assert_eq!(nodes[1].latency_ms, None);
+        assert!(nodes[2].latency_ms.is_some());
+        assert!(nodes[0].latency_ms > nodes[2].latency_ms);
+
         slow_request.await.unwrap();
         fast_request.await.unwrap();
         slow_task.await.unwrap();

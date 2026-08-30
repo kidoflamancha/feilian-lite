@@ -61,7 +61,11 @@ export type AuthPlatform = 'feishu' | 'oidc'
 export interface AuthNode {
   id: number
   name: string
-  protocol: 'udp' | 'tcp'
+  english_name: string | null
+  address: string
+  protocol: 'udp' | 'tcp' | 'unknown'
+  latency_ms: number | null
+  available: boolean
 }
 
 export interface DesktopQrChallenge {
