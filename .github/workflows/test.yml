@@ -107,7 +107,21 @@ jobs:
         run: npm --prefix apps/desktop ci
       - name: Stage desktop helper and Wintun
         run: npm --prefix apps/desktop run build:helper
-      - name: Test native crates
-        run: cargo test -p feilian-ipc -p feilian-helper-client -p feilian-helper -p feilian-desktop
+      - name: Test IPC crate
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p feilian-ipc
+      - name: Test helper crate
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p feilian-helper
+      - name: Test helper client crate
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p feilian-helper-client
+      - name: Test desktop crate
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p feilian-desktop
       - name: Build Windows desktop
         run: npm --prefix apps/desktop run tauri -- build --no-bundle
