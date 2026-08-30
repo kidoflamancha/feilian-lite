@@ -164,6 +164,7 @@ for (const scenario of scenarios) {
             ;(window as typeof window & { __COMMANDS__: Array<{ command: string; args: unknown }> })
               .__COMMANDS__.push({ command, args })
             if (command === 'helper_connect') {
+              await new Promise((resolve) => setTimeout(resolve, 150))
               return {
                 ...helper,
                 reachable: true,
@@ -210,6 +211,7 @@ for (const scenario of scenarios) {
       await expect(nodePicker).toContainText('北京节点')
       await expect(nodePicker).toContainText('128 ms')
       await page.locator('.power-button').getByText('连接', { exact: true }).click()
+      await expect(page.getByText('等待管理员授权')).toBeVisible()
       await expect(page.getByRole('button', { name: '断开连接' })).toBeVisible()
       await expect(page.getByRole('button', { name: /系统分流/ })).toBeDisabled()
       await expect(page.getByRole('button', { name: /SOCKS5/ })).toBeDisabled()

@@ -1,6 +1,8 @@
 mod libwg_backend;
 #[cfg(unix)]
 mod unix;
+#[cfg(windows)]
+mod windows;
 
 use async_trait::async_trait;
 use feilian_ipc::{
@@ -13,6 +15,8 @@ use sha2::{Digest, Sha256};
 pub use libwg_backend::LibwgBackend;
 #[cfg(unix)]
 pub use unix::UnixServer;
+#[cfg(windows)]
+pub use windows::{WindowsParentProcess, WindowsServer};
 
 #[async_trait]
 pub trait TunnelBackend: Send {

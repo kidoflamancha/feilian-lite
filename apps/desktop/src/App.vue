@@ -63,6 +63,9 @@ const pageTitle = computed(() => {
   return pages[activeView.value]
 })
 const statusLabel = computed(() => {
+  if (busy.value && !isRunning.value) {
+    return mode.value === 'system_split' ? '等待管理员授权' : '正在连接'
+  }
   if (!snapshot.value?.reachable) return '服务未启动'
   const labels = {
     idle: '已断开',
@@ -75,6 +78,9 @@ const statusLabel = computed(() => {
 })
 
 const statusDetail = computed(() => {
+  if (busy.value && !isRunning.value && mode.value === 'system_split') {
+    return '请在系统授权窗口输入管理员密码；未出现弹窗时请检查 Polkit 认证代理'
+  }
   if (snapshot.value?.active) {
     return `${snapshot.value.active.node_name} · ${snapshot.value.active.address}`
   }
@@ -356,7 +362,7 @@ onUnmounted(() => {
           <Power :size="19" />断开连接
         </button>
         <button v-else class="power-button" type="button" :disabled="!canConnect" @click="connect">
-          <Power :size="19" />{{ busy ? '正在连接' : selectedNodeId ? '连接' : '选择节点' }}
+          <Power :size="19" />{{ busy ? (mode === 'system_split' ? '等待授权' : '正在连接') : selectedNodeId ? '连接' : '选择节点' }}
         </button>
       </section>
 

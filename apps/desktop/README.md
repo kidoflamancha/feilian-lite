@@ -9,9 +9,15 @@ npm install
 npm run tauri dev
 ```
 
-On Linux, an unlocked Secret Service implementation such as GNOME Keyring or
-KWallet is required. System split-tunnel mode also requires `pkexec`; SOCKS5
-mode runs without elevation.
+Linux requires an unlocked Secret Service implementation such as GNOME Keyring
+or KWallet; system split-tunnel mode also requires `pkexec`. macOS uses Keychain
+and its administrator prompt. Windows uses Credential Manager, UAC, and the
+signed Wintun DLL staged during the release build. SOCKS5 mode runs without
+elevation on every platform.
+
+The Debian package installs a dedicated Polkit action for
+`/usr/bin/feilian-helper`. Direct executable runs do not install that action and
+require an already active graphical Polkit agent for system-tunnel authorization.
 
 ## Validation
 
@@ -50,6 +56,13 @@ The build compiles and stages `feilian-helper` using Tauri's target-triple
 sidecar naming convention, then includes it in the generated platform package.
 For cross-compilation, set `FEILIAN_TARGET_TRIPLE` to the same target passed to
 Tauri and Cargo.
+
+Native CI builds and tests Linux, macOS, and Windows. macOS artifacts are
+unsigned development builds until Developer ID signing and notarization are
+configured, so unsigned builds support SOCKS5 but intentionally reject system
+tunnel elevation. Windows uses a per-machine installer, downloads Wintun 0.14.1
+from the official site, checks its pinned SHA-256, and includes its
+redistribution license.
 
 Linux defaults to the reproducible Debian bundle. AppImage remains available as
 an explicit target:

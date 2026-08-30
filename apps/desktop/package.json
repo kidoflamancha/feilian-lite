@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "build:helper": "cargo build --manifest-path ../../Cargo.toml -p feilian-helper",
-    "build:helper:release": "cargo build --manifest-path ../../Cargo.toml -p feilian-helper --release && node scripts/stage-helper.mjs release",
+    "build:helper": "node scripts/build-helper.mjs debug",
+    "build:helper:release": "node scripts/build-helper.mjs release",
     "preview": "vite preview",
     "tauri": "tauri",
     "test:e2e": "playwright test"

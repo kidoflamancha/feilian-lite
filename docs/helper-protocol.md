@@ -42,6 +42,18 @@ root, while SOCKS5 callers require the current user UID. It also verifies the
 protocol version and request ID on every response and exposes typed methods
 instead of raw JSON to the desktop controller.
 
-The Windows transport is not implemented yet. It must use a named pipe whose ACL
-is limited to the launching user's SID and administrators; TCP loopback is not
-an acceptable substitute.
+## Windows Security
+
+The Windows transport uses a random per-desktop-process named pipe under the
+local `\\.\pipe\feilian-lite-*` namespace. The server enables first-instance
+protection and rejects remote clients. Its DACL grants full access only to the
+launching user's SID, SYSTEM, and Administrators. After accepting a connection
+it queries the client PID from the pipe handle and rejects every process except
+the exact desktop PID supplied when the helper was launched. The high-entropy
+pipe name prevents an unrelated process from pre-creating a predictable
+endpoint.
+
+The system helper is launched through UAC, while the SOCKS5 helper stays at the
+desktop user's privilege level. Both monitor the desktop process handle and
+exit through normal cleanup when it terminates. TCP loopback is not used as an
+IPC substitute.

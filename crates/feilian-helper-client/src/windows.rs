@@ -1,6 +1,7 @@
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{atomic::AtomicU32, Arc};
 use std::time::Duration;
 
 use feilian_ipc::{
@@ -8,24 +9,28 @@ use feilian_ipc::{
     TunnelStats, TunnelStatus, MAX_MESSAGE_BYTES,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
-use tokio::time::timeout;
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+use tokio::time::{sleep, timeout};
+use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
+use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 
 use crate::{validate_response, ClientError};
 
+const PIPE_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+
 #[derive(Clone)]
 pub struct HelperClient {
-    socket_path: PathBuf,
-    expected_server_uid: u32,
+    pipe_name: PathBuf,
+    expected_server_pid: Arc<AtomicU32>,
     timeout: Duration,
     next_request_id: Arc<AtomicU64>,
 }
 
 impl HelperClient {
-    pub fn new(socket_path: impl AsRef<Path>, expected_server_uid: u32) -> Self {
+    pub fn new(pipe_name: impl AsRef<Path>, expected_server_pid: Arc<AtomicU32>) -> Self {
         Self {
-            socket_path: socket_path.as_ref().to_path_buf(),
-            expected_server_uid,
+            pipe_name: pipe_name.as_ref().to_path_buf(),
+            expected_server_pid,
             timeout: Duration::from_secs(10),
             next_request_id: Arc::new(AtomicU64::new(1)),
         }
@@ -95,15 +100,20 @@ impl HelperClient {
     }
 
     async fn exchange(&self, request: Request) -> Result<HelperResponse, ClientError> {
-        let mut stream = UnixStream::connect(&self.socket_path).await?;
-        let credentials = stream.peer_cred()?;
-        if credentials.uid() != self.expected_server_uid {
-            return Err(ClientError::ServerIdentity {
-                actual_uid: credentials.uid(),
-                expected_uid: self.expected_server_uid,
+        let mut stream = self.connect().await?;
+        let expected_pid = self.expected_server_pid.load(Ordering::Acquire);
+        let mut actual_pid = 0_u32;
+        let succeeded =
+            unsafe { GetNamedPipeServerProcessId(stream.as_raw_handle() as _, &mut actual_pid) };
+        if succeeded == 0 {
+            return Err(ClientError::Io(std::io::Error::last_os_error()));
+        }
+        if expected_pid == 0 || actual_pid != expected_pid {
+            return Err(ClientError::ServerProcessIdentity {
+                actual_pid,
+                expected_pid,
             });
         }
-
         let request_id = request.request_id;
         let request = encode_request(&request)?;
         stream.write_u32(request.len() as u32).await?;
@@ -122,17 +132,26 @@ impl HelperClient {
         stream.read_exact(&mut response).await?;
         validate_response(decode_response(&response)?, request_id)
     }
+
+    async fn connect(&self) -> Result<NamedPipeClient, ClientError> {
+        loop {
+            match ClientOptions::new().open(&self.pipe_name) {
+                Ok(client) => return Ok(client),
+                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {
+                    sleep(PIPE_RETRY_INTERVAL).await;
+                }
+                Err(error) => return Err(ClientError::Io(error)),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
     use async_trait::async_trait;
-    use feilian_helper::{Supervisor, TunnelBackend, UnixServer};
-    use feilian_ipc::{ErrorCode, HelperError, HelperState, Response};
-    use tempfile::tempdir;
+    use feilian_helper::{Supervisor, TunnelBackend, WindowsParentProcess, WindowsServer};
+    use feilian_ipc::{HelperState, TunnelSpec, TunnelStats};
+    use std::sync::atomic::AtomicU32;
 
     use super::*;
 
@@ -150,10 +169,7 @@ mod tests {
         }
 
         async fn stats(&mut self) -> Result<TunnelStats, String> {
-            Ok(TunnelStats {
-                tx_bytes: 10,
-                rx_bytes: 20,
-            })
+            Ok(TunnelStats::default())
         }
 
         async fn cleanup(&mut self) -> Result<(), String> {
@@ -161,23 +177,20 @@ mod tests {
         }
     }
 
-    fn socket_fixture() -> (tempfile::TempDir, PathBuf, u32, u32) {
-        let directory = tempdir().unwrap();
-        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let metadata = fs::metadata(directory.path()).unwrap();
-        let socket = directory.path().join("helper.sock");
-        (directory, socket, metadata.uid(), metadata.gid())
+    fn pipe_name(label: &str) -> String {
+        format!(r"\\.\pipe\feilian-lite-test-{}-{label}", std::process::id())
     }
 
     #[tokio::test]
     async fn exchanges_typed_status_with_authenticated_server() {
-        let (_directory, socket, uid, gid) = socket_fixture();
-        let server = UnixServer::bind(&socket, uid, gid).unwrap();
+        let pipe = pipe_name("status");
+        let parent = WindowsParentProcess::open(std::process::id()).unwrap();
+        let mut server = WindowsServer::bind(&pipe, &parent).unwrap();
         let server_task = tokio::spawn(async move {
             let mut supervisor = Supervisor::new(FakeBackend);
             server.accept_once(&mut supervisor).await.unwrap();
         });
-        let client = HelperClient::new(socket, uid);
+        let client = HelperClient::new(pipe, Arc::new(AtomicU32::new(std::process::id())));
 
         let status = client.status().await.unwrap();
 
@@ -186,59 +199,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_server_with_unexpected_uid_before_sending_request() {
-        let (_directory, socket, uid, gid) = socket_fixture();
-        let server = UnixServer::bind(&socket, uid, gid).unwrap();
+    async fn server_rejects_a_client_with_the_wrong_process_id() {
+        let mut allowed_process = std::process::Command::new("cmd.exe")
+            .args(["/C", "ping -n 30 127.0.0.1 >nul"])
+            .spawn()
+            .unwrap();
+        let pipe = pipe_name("wrong-pid");
+        let parent = WindowsParentProcess::open(allowed_process.id()).unwrap();
+        let mut server = WindowsServer::bind(&pipe, &parent).unwrap();
         let server_task = tokio::spawn(async move {
             let mut supervisor = Supervisor::new(FakeBackend);
-            let _ = server.accept_once(&mut supervisor).await;
+            server.accept_once(&mut supervisor).await
         });
-        let client = HelperClient::new(socket, uid.saturating_add(1));
+        let client = HelperClient::new(pipe, Arc::new(AtomicU32::new(std::process::id() + 1)));
 
-        let error = client.status().await.unwrap_err();
-
-        assert!(matches!(error, ClientError::ServerIdentity { .. }));
-        server_task.await.unwrap();
-    }
-
-    #[test]
-    fn rejects_uncorrelated_response() {
-        let response = Response::error(
-            9,
-            HelperError {
-                code: ErrorCode::InvalidRequest,
-                message: "invalid".to_string(),
-                retryable: false,
-            },
-        );
-
-        assert!(matches!(
-            validate_response(response, 8),
-            Err(ClientError::RequestMismatch {
-                actual: 9,
-                expected: 8,
-            })
-        ));
-    }
-
-    #[test]
-    fn propagates_structured_helper_errors() {
-        let response = Response::error(
-            8,
-            HelperError {
-                code: ErrorCode::BackendFailure,
-                message: "failed".to_string(),
-                retryable: true,
-            },
-        );
-
-        assert!(matches!(
-            validate_response(response, 8),
-            Err(ClientError::Helper(HelperError {
-                code: ErrorCode::BackendFailure,
-                retryable: true,
-                ..
-            }))
-        ));
+        assert!(client.status().await.is_err());
+        let server_error = server_task.await.unwrap().unwrap_err();
+        assert_eq!(server_error.kind(), std::io::ErrorKind::PermissionDenied);
+        allowed_process.kill().unwrap();
+        allowed_process.wait().unwrap();
     }
 }

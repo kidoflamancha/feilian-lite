@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 #[cfg(unix)]
 use feilian_helper::{LibwgBackend, Supervisor, UnixServer};
+#[cfg(windows)]
+use feilian_helper::{LibwgBackend, Supervisor, WindowsParentProcess, WindowsServer};
 
 #[cfg(unix)]
 #[tokio::main]
@@ -124,7 +126,81 @@ mod tests {
 }
 
 #[cfg(windows)]
-fn main() {
-    eprintln!("Windows named-pipe transport is not implemented yet");
-    std::process::exit(2);
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = WindowsOptions::parse(std::env::args().skip(1))?;
+    let parent = WindowsParentProcess::open(options.parent_pid)?;
+    let mut server = WindowsServer::bind(options.pipe, &parent)?;
+    let mut supervisor = Supervisor::new(LibwgBackend::default());
+    let mut parent_exit = tokio::task::spawn_blocking(move || parent.wait());
+
+    loop {
+        tokio::select! {
+            result = server.accept_once(&mut supervisor) => {
+                if let Err(error) = result {
+                    eprintln!("helper request failed: {error}");
+                }
+            }
+            result = tokio::signal::ctrl_c() => {
+                result?;
+                break;
+            }
+            _ = &mut parent_exit => break,
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+struct WindowsOptions {
+    pipe: std::path::PathBuf,
+    parent_pid: u32,
+}
+
+#[cfg(windows)]
+impl WindowsOptions {
+    fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut pipe = None;
+        let mut parent_pid = None;
+        while let Some(argument) = args.next() {
+            let value = args
+                .next()
+                .ok_or_else(|| format!("missing value for {argument}"))?;
+            match argument.as_str() {
+                "--pipe" => pipe = Some(std::path::PathBuf::from(value)),
+                "--parent-pid" => parent_pid = Some(value.parse()?),
+                _ => return Err(format!("unknown argument: {argument}").into()),
+            }
+        }
+        Ok(Self {
+            pipe: pipe.ok_or("--pipe is required")?,
+            parent_pid: parent_pid.ok_or("--parent-pid is required")?,
+        })
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn parses_windows_pipe_and_parent_process() {
+        let options = WindowsOptions::parse(
+            [
+                "--pipe",
+                r"\\.\pipe\feilian-lite-test",
+                "--parent-pid",
+                "42",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(
+            options.pipe,
+            std::path::Path::new(r"\\.\pipe\feilian-lite-test")
+        );
+        assert_eq!(options.parent_pid, 42);
+    }
 }

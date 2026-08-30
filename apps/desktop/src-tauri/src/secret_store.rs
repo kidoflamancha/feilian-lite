@@ -24,7 +24,9 @@ impl SecretStore for SystemSecretStore {
     }
 
     fn set(&self, name: &str, value: &str) -> Result<(), String> {
-        entry(name)?.set_password(value).map_err(|error| error.to_string())
+        entry(name)?
+            .set_password(value)
+            .map_err(|error| error.to_string())
     }
 
     fn delete(&self, name: &str) -> Result<(), String> {
@@ -90,7 +92,10 @@ mod tests {
         let store = SystemSecretStore;
 
         store.set(&name, "temporary-secret").unwrap();
-        assert_eq!(store.get(&name).unwrap().as_deref(), Some("temporary-secret"));
+        assert_eq!(
+            store.get(&name).unwrap().as_deref(),
+            Some("temporary-secret")
+        );
         store.delete(&name).unwrap();
         assert_eq!(store.get(&name).unwrap(), None);
     }

@@ -1211,12 +1211,14 @@ dependencies = [
  "feilian-lite",
  "keyring",
  "libc",
+ "rand",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1231,6 +1233,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1242,6 +1245,7 @@ dependencies = [
  "feilian-ipc",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1289,7 +1293,6 @@ dependencies = [
  "terminal_graphics",
  "tinytemplate",
  "tokio",
- "uds_windows",
  "x25519-dalek",
 ]
 

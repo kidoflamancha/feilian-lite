@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use anyhow::Context;
+use anyhow::Result;
 
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;

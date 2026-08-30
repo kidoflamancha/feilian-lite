@@ -26,8 +26,9 @@ npm run tauri -- build --no-bundle
 ```
 
 当前桌面工作台已经实现企业发现、飞书扫码/OIDC 登录、认证状态轮询、节点列表和按节点连接。
-SOCKS5 helper 在 Unix 上按需以当前用户启动；Linux 系统分流通过 `pkexec` 请求提权。断开或
-helper 启动失败时会释放服务端 VPN 会话。macOS 提权 launcher 与 Windows named pipe 尚未完成。
+SOCKS5 helper 按需以当前用户启动；Linux 系统分流通过 `pkexec` 请求提权，macOS 通过系统
+管理员授权对话框启动，Windows 通过 UAC 启动。Windows helper 使用随机本地 named pipe，
+拒绝远程连接并校验调用方 desktop PID。断开或 helper 启动失败时会释放服务端 VPN 会话。
 
 节点选择器展示服务端中英文名称、VPN endpoint、传输协议和实时延迟。延迟探测并发执行且
 单节点最多等待 3 秒；不可达节点仍会显示，但在刷新恢复前不可选择。
@@ -41,9 +42,12 @@ macOS 使用 Keychain，Windows 使用 Credential Manager。启动新版桌面�
 binary 收入安装包。`tauri build --no-bundle` 仅生成可执行文件；直接测试时需保持
 `feilian-desktop` 和 `feilian-helper` 位于同一目录。
 
-当前 Linux x86_64 构建、Secret Service 迁移和 helper staging 已验证。macOS Keychain 与
-Windows Credential Manager 已配置为对应平台 backend，但完整平台发布仍分别受 macOS 提权
-launcher、Windows named-pipe transport、签名和安装器验证约束。
+Linux 使用 Secret Service，macOS 使用 Keychain，Windows 使用 Credential Manager。三平台
+helper transport、提权 launcher、sidecar staging 和原生 CI 均已配置。Windows 安装包会从
+Wintun 官网下载 0.14.1 签名 DLL，校验固定 SHA-256 后打包。macOS/Windows 的最终公开发布仍需
+在签名身份下完成 notarization、代码签名和安装器实机验收。Windows NSIS 固定使用
+per-machine 安装以保护会被 UAC 提权执行的 helper 和 Wintun；macOS 系统分流只允许从
+`/Applications` 中、由同一 Team ID 签名的 desktop/helper 启动。
 
 ### Linux 显示后端
 
@@ -55,6 +59,13 @@ renderer；用户显式设置的 `WEBKIT_DISABLE_DMABUF_RENDERER` 会被保留�
 ```bash
 FEILIAN_GDK_BACKEND=x11 npm --prefix apps/desktop run tauri dev
 ```
+
+### Linux 管理员授权
+
+Deb 安装包会安装 `dev.feilian.lite.policy`，系统分流通过 GNOME/KDE 的 Polkit
+认证窗口请求管理员权限。应用禁止回退到不可见的终端密码输入；认证代理不可用或用户取消时，
+连接页会显示明确错误。直接运行未安装的二进制时不会安装该 policy，因此系统分流测试依赖宿主
+已有且正在运行的图形 Polkit agent；SOCKS5 模式不受影响。
 
 ## 上游使用说明
 
@@ -155,7 +166,9 @@ $env:RUST_LOG="debug"; .\corplink-rs.exe config.json
 
 ### wintun.dll 说明
 
-`corplink-rs` 依赖 [Wintun][6] 虚拟网卡驱动来创建 WireGuard 隧道。由于 Wintun 的许可证要求用户从[官网][6]直接获取，我们无法在 release 包中附带该文件。
+`corplink-rs` 依赖 [Wintun][6] 虚拟网卡驱动来创建 WireGuard 隧道。官方签名 DLL 允许随使用其
+API 的软件分发；Feilian Lite 桌面安装包会校验固定 SHA-256 后自动附带该文件。手工使用 CLI 时
+仍可通过下面的 `setup.ps1` 获取 DLL。
 
 `setup.ps1` 脚本会自动从 `wintun.net` 下载并解压 `amd64` 版本的 `wintun.dll` 到当前目录。
 

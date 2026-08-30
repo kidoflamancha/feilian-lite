@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use feilian_helper_client::{ClientError, HelperClient};
@@ -7,8 +9,8 @@ use feilian_ipc::{
     TunnelStats, TunnelStatus,
 };
 use feilian_lite::{
-    get_company_url, Client, Config, QrChallenge, QrPollStatus, VpnNode, WgConf,
-    PLATFORM_LARK, PLATFORM_OIDC,
+    get_company_url, Client, Config, QrChallenge, QrPollStatus, VpnNode, WgConf, PLATFORM_LARK,
+    PLATFORM_OIDC,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -56,10 +58,7 @@ impl AppController {
         Self::with_secret_store(data_dir, Arc::new(SystemSecretStore))
     }
 
-    fn with_secret_store(
-        data_dir: impl AsRef<Path>,
-        secret_store: Arc<dyn SecretStore>,
-    ) -> Self {
+    fn with_secret_store(data_dir: impl AsRef<Path>, secret_store: Arc<dyn SecretStore>) -> Self {
         let data_dir = data_dir.as_ref();
         Self {
             endpoints: HelperEndpoints::new(data_dir),
@@ -598,7 +597,7 @@ struct ActiveConnection {
 fn tunnel_spec(mode: HelperMode, node_name: String, config: &WgConf) -> TunnelSpec {
     TunnelSpec {
         node_name,
-        interface_name: "feilian-lite".to_string(),
+        interface_name: tunnel_interface_name(mode).to_string(),
         mode: match mode {
             HelperMode::SystemSplit => IpcTunnelMode::SystemSplit,
             HelperMode::Socks5 => IpcTunnelMode::Socks5 {
@@ -626,6 +625,14 @@ fn tunnel_spec(mode: HelperMode, node_name: String, config: &WgConf) -> TunnelSp
         } else {
             TransportProtocol::Udp
         },
+    }
+}
+
+fn tunnel_interface_name(mode: HelperMode) -> &'static str {
+    if cfg!(target_os = "macos") && mode == HelperMode::SystemSplit {
+        "utun"
+    } else {
+        "feilian-lite"
     }
 }
 
@@ -686,6 +693,11 @@ impl ControllerError {
                 "Tunnel helper identity check failed",
                 false,
             ),
+            ClientError::ServerProcessIdentity { .. } => Self::new(
+                "helper_identity_mismatch",
+                "Tunnel helper process identity check failed",
+                false,
+            ),
             ClientError::ProtocolMismatch { .. } => Self::new(
                 "helper_protocol_mismatch",
                 "Desktop and tunnel helper versions are incompatible",
@@ -730,20 +742,48 @@ pub(crate) struct HelperEndpoints {
     pub(crate) data_dir: PathBuf,
     system_socket: PathBuf,
     user_socket: PathBuf,
+    #[cfg(unix)]
     system_uid: u32,
+    #[cfg(unix)]
     pub(crate) user_uid: u32,
+    #[cfg(unix)]
     pub(crate) user_gid: u32,
+    #[cfg(windows)]
+    system_pid: Arc<AtomicU32>,
+    #[cfg(windows)]
+    user_pid: Arc<AtomicU32>,
 }
 
 impl HelperEndpoints {
     pub(crate) fn new(data_dir: &Path) -> Self {
+        #[cfg(windows)]
+        let (system_socket, user_socket) = {
+            let nonce = rand::random::<u128>();
+            let prefix = format!(r"\\.\pipe\feilian-lite-{}-{nonce:032x}", std::process::id());
+            (
+                PathBuf::from(format!("{prefix}-system")),
+                PathBuf::from(format!("{prefix}-user")),
+            )
+        };
+        #[cfg(not(windows))]
+        let (system_socket, user_socket) = (
+            data_dir.join("system-helper.sock"),
+            data_dir.join("user-helper.sock"),
+        );
         Self {
             data_dir: data_dir.to_path_buf(),
-            system_socket: data_dir.join("system-helper.sock"),
-            user_socket: data_dir.join("user-helper.sock"),
+            system_socket,
+            user_socket,
+            #[cfg(unix)]
             system_uid: 0,
+            #[cfg(unix)]
             user_uid: current_uid(),
+            #[cfg(unix)]
             user_gid: current_gid(),
+            #[cfg(windows)]
+            system_pid: Arc::new(AtomicU32::new(0)),
+            #[cfg(windows)]
+            user_pid: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -755,10 +795,27 @@ impl HelperEndpoints {
     }
 
     pub(crate) fn client(&self, mode: HelperMode) -> HelperClient {
+        #[cfg(unix)]
         match mode {
             HelperMode::SystemSplit => HelperClient::new(&self.system_socket, self.system_uid),
             HelperMode::Socks5 => HelperClient::new(&self.user_socket, self.user_uid),
         }
+        #[cfg(windows)]
+        match mode {
+            HelperMode::SystemSplit => {
+                HelperClient::new(&self.system_socket, Arc::clone(&self.system_pid))
+            }
+            HelperMode::Socks5 => HelperClient::new(&self.user_socket, Arc::clone(&self.user_pid)),
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn set_server_pid(&self, mode: HelperMode, process_id: u32) {
+        match mode {
+            HelperMode::SystemSplit => &self.system_pid,
+            HelperMode::Socks5 => &self.user_pid,
+        }
+        .store(process_id, Ordering::Release);
     }
 }
 
@@ -789,21 +846,12 @@ fn helper_binary_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(executable_name))
 }
 
-#[cfg(not(unix))]
-fn current_uid() -> u32 {
-    0
-}
-
-#[cfg(not(unix))]
-fn current_gid() -> u32 {
-    0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::secret_store::MemorySecretStore;
 
+    #[cfg(unix)]
     #[test]
     fn separates_system_and_user_helper_endpoints() {
         let endpoints = HelperEndpoints::new(Path::new("/tmp/feilian-lite"));
@@ -817,6 +865,47 @@ mod tests {
             PathBuf::from("/tmp/feilian-lite/user-helper.sock")
         );
         assert_eq!(endpoints.system_uid, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uses_distinct_random_local_pipe_endpoints() {
+        let first = HelperEndpoints::new(Path::new(r"C:\data"));
+        let second = HelperEndpoints::new(Path::new(r"C:\data"));
+
+        assert!(first
+            .system_socket
+            .to_string_lossy()
+            .starts_with(r"\\.\pipe\feilian-lite-"));
+        assert_ne!(first.system_socket, first.user_socket);
+        assert_ne!(first.system_socket, second.system_socket);
+    }
+
+    #[test]
+    fn system_tunnel_uses_platform_interface_name() {
+        let config = WgConf {
+            address: "10.0.0.2/32".to_string(),
+            address6: String::new(),
+            peer_address: "192.0.2.1:51820".to_string(),
+            mtu: 1420,
+            public_key: "public".to_string(),
+            private_key: "private".to_string(),
+            peer_key: "peer".to_string(),
+            allowed_ips: vec!["10.0.0.0/8".to_string()],
+            routes: vec!["10.0.0.0/8".to_string()],
+            dns: "10.0.0.53".to_string(),
+            protocol: 0,
+        };
+
+        let spec = tunnel_spec(HelperMode::SystemSplit, "node-a".to_string(), &config);
+
+        assert_eq!(
+            spec.interface_name,
+            tunnel_interface_name(HelperMode::SystemSplit)
+        );
+
+        let socks_spec = tunnel_spec(HelperMode::Socks5, "node-a".to_string(), &config);
+        assert_eq!(socks_spec.interface_name, "feilian-lite");
     }
 
     #[test]
@@ -897,10 +986,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let controller = AppController::with_secret_store(
-            directory.path(),
-            Arc::new(MemorySecretStore::new()),
-        );
+        let controller =
+            AppController::with_secret_store(directory.path(), Arc::new(MemorySecretStore::new()));
 
         let error = controller.auth_status().await.unwrap_err();
 
@@ -929,6 +1016,36 @@ mod tests {
         assert_eq!(connected.state, HelperState::Running);
 
         let cleaned = controller.cleanup(HelperMode::Socks5).await;
+        assert!(cleaned.reachable);
+        assert_eq!(cleaned.state, HelperState::Idle);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a live tenant, graphical elevation, and built helper"]
+    async fn live_system_tunnel_connects_and_cleans_up() {
+        let data_dir = std::env::var("FEILIAN_LIVE_DATA_DIR")
+            .expect("FEILIAN_LIVE_DATA_DIR must point to the desktop data directory");
+        std::env::var("FEILIAN_HELPER_PATH")
+            .expect("FEILIAN_HELPER_PATH must point to a built helper");
+        let controller = AppController::new(data_dir);
+
+        controller.initialize().await.unwrap();
+        let auth = controller.auth_refresh_nodes().await.unwrap();
+        assert!(auth.authenticated);
+        let node = auth
+            .nodes
+            .iter()
+            .find(|node| node.available)
+            .expect("live tenant has no reachable VPN nodes");
+
+        let connected = controller
+            .connect(HelperMode::SystemSplit, node.id)
+            .await
+            .unwrap();
+        assert!(connected.reachable);
+        assert_eq!(connected.state, HelperState::Running);
+
+        let cleaned = controller.cleanup(HelperMode::SystemSplit).await;
         assert!(cleaned.reachable);
         assert_eq!(cleaned.state, HelperState::Idle);
     }

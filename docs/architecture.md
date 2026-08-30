@@ -32,8 +32,10 @@ supervisor state.
 SOCKS5 mode runs without elevation. System split-tunnel mode starts the helper
 with platform elevation and keeps the desktop application itself unprivileged.
 Linux and macOS currently use an owner-only Unix socket with peer UID checking.
-Windows named-pipe transport and platform launchers are the next implementation
-step.
+Windows uses a per-launch random named pipe. The pipe rejects remote clients,
+allows only one server instance, and carries an explicit DACL granting access
+only to the launching user's SID, SYSTEM, and Administrators. The helper also
+verifies that every client is the exact desktop process that launched it.
 
 ### Desktop application
 
@@ -53,12 +55,19 @@ summaries. A selected node is prepared by the protocol core, converted to the
 versioned `TunnelSpec`, and sent to a helper only after its identity and version
 are verified. Failed helper startup triggers a best-effort server disconnect.
 
-On Unix, SOCKS5 starts the sibling helper directly. Linux system split-tunnel
-mode starts it through `pkexec`. Every helper receives the desktop PID and exits
-through its normal cleanup path after that parent disappears. macOS elevation,
-and Windows named pipes are not implemented yet. Tauri release builds stage the
-target-specific helper and bundle it as an external binary next to the desktop
-executable.
+SOCKS5 starts the sibling helper directly. Linux system split-tunnel mode uses
+`pkexec`, macOS uses a parameterized AppleScript administrator prompt, and
+Windows uses ShellExecute/UAC while retaining the elevated process handle and
+verifying the named-pipe server PID before sending tunnel secrets. Every helper
+receives the desktop PID and exits through its normal cleanup path after that
+parent disappears. macOS requests a dynamically allocated `utun` interface.
+Tauri release builds stage the target-specific helper and bundle it as an
+external binary next to the desktop executable.
+
+The macOS AppleScript launcher is appropriate for the current beta. A signed
+production deployment should replace it with an `SMAppService` privileged
+helper and authenticate IPC using code-signing requirements. Windows packages
+stage the official signed Wintun DLL after verifying its pinned SHA-256.
 
 On Linux the desktop configures WebKit before Tauri initializes. It preserves
 the native GTK backend and disables the DMA-BUF renderer to avoid a reproducible
@@ -87,7 +96,7 @@ hard error rather than a reason to generate a different WireGuard identity.
 
 ## Initial Delivery Scope
 
-- Windows x86_64, macOS arm64, and Linux x86_64.
+- Windows x86_64, macOS, and Linux x86_64.
 - Feishu QR code and OIDC authentication.
 - System split-tunnel and local SOCKS5 modes.
 - UDP and TCP transports with IPv4 and IPv6 support inherited from upstream.

@@ -1,20 +1,27 @@
 #[cfg(unix)]
 mod unix;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(unix)]
 pub use unix::HelperClient;
+#[cfg(windows)]
+pub use windows::HelperClient;
 
 use std::error::Error;
 use std::fmt;
 use std::io;
 
-use feilian_ipc::{CodecError, HelperError};
+use feilian_ipc::{
+    CodecError, HelperError, HelperResponse, Response, ResponsePayload, PROTOCOL_VERSION,
+};
 
 #[derive(Debug)]
 pub enum ClientError {
     Io(io::Error),
     Codec(CodecError),
     ServerIdentity { actual_uid: u32, expected_uid: u32 },
+    ServerProcessIdentity { actual_pid: u32, expected_pid: u32 },
     ProtocolMismatch { actual: u16, expected: u16 },
     RequestMismatch { actual: u64, expected: u64 },
     UnexpectedResponse(&'static str),
@@ -33,6 +40,13 @@ impl fmt::Display for ClientError {
             } => write!(
                 formatter,
                 "helper server uid {actual_uid} does not match expected uid {expected_uid}"
+            ),
+            Self::ServerProcessIdentity {
+                actual_pid,
+                expected_pid,
+            } => write!(
+                formatter,
+                "helper server pid {actual_pid} does not match expected pid {expected_pid}"
             ),
             Self::ProtocolMismatch { actual, expected } => write!(
                 formatter,
@@ -73,5 +87,24 @@ impl From<io::Error> for ClientError {
 impl From<CodecError> for ClientError {
     fn from(error: CodecError) -> Self {
         Self::Codec(error)
+    }
+}
+
+fn validate_response(response: Response, request_id: u64) -> Result<HelperResponse, ClientError> {
+    if response.protocol_version != PROTOCOL_VERSION {
+        return Err(ClientError::ProtocolMismatch {
+            actual: response.protocol_version,
+            expected: PROTOCOL_VERSION,
+        });
+    }
+    if response.request_id != request_id {
+        return Err(ClientError::RequestMismatch {
+            actual: response.request_id,
+            expected: request_id,
+        });
+    }
+    match response.payload {
+        ResponsePayload::Success(response) => Ok(response),
+        ResponsePayload::Error(error) => Err(ClientError::Helper(error)),
     }
 }

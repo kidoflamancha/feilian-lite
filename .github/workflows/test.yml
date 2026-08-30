@@ -1,31 +1,107 @@
 name: test
 
 on:
+  pull_request:
   push:
     branches:
-      - test
+      - main
 
 jobs:
+  test-linux:
+    name: test-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ">=1.22.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install desktop dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf
+      - name: Build libwg
+        run: cd libwg && ./build.sh
+      - name: Install frontend dependencies
+        run: npm --prefix apps/desktop ci
+      - name: Stage desktop helper
+        run: npm --prefix apps/desktop run build:helper
+      - name: Test Rust workspace
+        run: cargo test --workspace
+      - name: Lint desktop and helper
+        run: |
+          cargo clippy -p feilian-desktop --all-targets --no-deps -- -D warnings
+          cargo clippy -p feilian-helper --all-targets --no-deps -- -D warnings
+      - name: Test frontend
+        run: |
+          npm --prefix apps/desktop exec playwright install --with-deps chromium
+          npm --prefix apps/desktop run build
+          npm --prefix apps/desktop run test:e2e
+
+  test-macos:
+    name: test-macos
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ">=1.22.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Build libwg
+        run: cd libwg && ./build.sh
+      - name: Install frontend dependencies
+        run: npm --prefix apps/desktop ci
+      - name: Stage desktop helper
+        run: npm --prefix apps/desktop run build:helper
+      - name: Test native crates
+        run: cargo test -p feilian-ipc -p feilian-helper-client -p feilian-helper -p feilian-desktop
+      - name: Build macOS desktop
+        run: npm --prefix apps/desktop run tauri -- build --no-bundle
+
   build-windows:
-    name: build-windows
+    name: test-windows
     runs-on: windows-latest
     steps:
-      - name: checkout code
-        uses: actions/checkout@v4
-      - name: setup go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
         with:
-          go-version: '>=1.22.0'
-      - name: build libwg
-        run: cd libwg && ./build.ps1
-      - name: rust install gnu toolchain
-        run: rustup toolchain install stable-gnu
-      - name: rust use gnu toolchain
-        run: rustup default stable-x86_64-pc-windows-gnu
-      - name: build package
-        run: cargo build --release
-      - name: build check result
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ">=1.22.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make mingw-w64-x86_64-gcc
+          path-type: inherit
+      - name: Configure Rust GNU toolchain
+        shell: pwsh
         run: |
-          Move-Item -Path "target/release/corplink-rs.exe" -Destination "."
-          Move-Item -Path "config/config.json" -Destination "."
-          Compress-Archive -Path corplink-rs.exe,config.json -Destination corplink-rs-${{ github.ref_name }}-windows.zip
+          rustup toolchain install stable-gnu
+          rustup default stable-x86_64-pc-windows-gnu
+      - name: Build libwg
+        shell: msys2 {0}
+        run: cd libwg/wireguard-go && make libwg && mv libwg.* ..
+      - name: Install frontend dependencies
+        run: npm --prefix apps/desktop ci
+      - name: Stage desktop helper and Wintun
+        run: npm --prefix apps/desktop run build:helper
+      - name: Test native crates
+        run: cargo test -p feilian-ipc -p feilian-helper-client -p feilian-helper -p feilian-desktop
+      - name: Build Windows desktop
+        run: npm --prefix apps/desktop run tauri -- build --no-bundle

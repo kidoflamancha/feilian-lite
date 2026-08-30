@@ -2,12 +2,19 @@ mod controller;
 #[cfg(target_os = "linux")]
 mod display_backend;
 mod launcher;
+#[cfg(target_os = "linux")]
+mod linux_authorization;
 mod secret_store;
 
 use controller::{
     AppController, AuthConfiguration, AuthSnapshot, ControllerError, HelperMode, HelperSnapshot,
 };
 use tauri::Manager;
+
+#[cfg(target_os = "linux")]
+pub fn run_authorization_cli() -> Option<i32> {
+    linux_authorization::run_if_requested()
+}
 
 #[tauri::command]
 async fn helper_status(
