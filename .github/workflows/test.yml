@@ -132,18 +132,36 @@ jobs:
         run: |
           $testExecutable = Get-ChildItem target/debug/deps/feilian_desktop_lib-*.exe | Select-Object -First 1
           if (!$testExecutable) { throw "Desktop test executable was not found" }
-          $searchDirectories = @($testExecutable.DirectoryName, "$PWD\target\debug") + ($env:PATH -split ';')
+          $searchDirectories = @(
+            $testExecutable.DirectoryName,
+            "$PWD\target\debug",
+            [Environment]::SystemDirectory,
+            $env:SystemRoot,
+            $PWD.Path
+          ) + ($env:PATH -split ';')
           $imports = & objdump -p $testExecutable.FullName |
             Select-String 'DLL Name:' |
             ForEach-Object { ($_ -split 'DLL Name:')[1].Trim() }
           $missing = @($imports | Where-Object {
             $dependency = $_
-            -not ($searchDirectories | Where-Object { $_ -and (Test-Path (Join-Path $_ $dependency)) } | Select-Object -First 1)
+            $isApiSet = $dependency -match '^(api-ms-|ext-ms-)'
+            !$isApiSet -and -not ($searchDirectories | Where-Object {
+              $_ -and (Test-Path -LiteralPath (Join-Path $_ $dependency) -PathType Leaf)
+            } | Select-Object -First 1)
           })
           if ($missing.Count -gt 0) {
             $message = ($missing -join ', ')
             Write-Output "::error title=Missing desktop test runtime::$message"
             exit 1
+          }
+          $output = & $testExecutable.FullName --list 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) {
+            $message = (($output | Select-Object -Last 30) -join "`n")
+            $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows desktop harness failed to load::$message"
+            exit $exitCode
           }
       - name: Test desktop controller
         env:
