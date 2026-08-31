@@ -130,5 +130,16 @@ jobs:
         run: cargo test -p feilian-helper-client
       - name: Compile desktop tests
         run: cargo test -p feilian-desktop --no-run
-      - name: Build Windows desktop
-        run: npm --prefix apps/desktop run tauri -- build --no-bundle
+      - name: Set validation package version
+        shell: pwsh
+        run: node apps/desktop/scripts/set-release-version.mjs 0.1.0-dev
+      - name: Build Windows installers
+        shell: pwsh
+        run: |
+          npm --prefix apps/desktop run tauri -- build --bundles nsis,msi 2>&1 | Tee-Object -FilePath windows-bundle.log
+          if ($LASTEXITCODE -ne 0) {
+            $details = (Get-Content windows-bundle.log -Tail 60) -join "`n"
+            $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows bundle failure::$details"
+            exit 1
+          }
