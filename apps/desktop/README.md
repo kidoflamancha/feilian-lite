@@ -52,6 +52,14 @@ cargo test -p feilian-desktop \
 npm run tauri -- build
 ```
 
+To build downloadable validation packages on GitHub, open **Actions**, choose
+the **release** workflow, select **Run workflow**, and enter a version such as
+`0.1.0-beta.1`. After all three jobs finish, open that workflow run and download
+`feilian-lite-linux`, `feilian-lite-macos`, and `feilian-lite-windows` from its
+**Artifacts** section. GitHub wraps each artifact in a ZIP; extract it before
+installing the contained `.deb`, `.dmg`, `.exe`, or `.msi`. Validation artifacts
+are retained for 14 days.
+
 The build compiles and stages `feilian-helper` using Tauri's target-triple
 sidecar naming convention, then includes it in the generated platform package.
 For cross-compilation, set `FEILIAN_TARGET_TRIPLE` to the same target passed to
