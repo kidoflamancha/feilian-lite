@@ -39,7 +39,7 @@ jobs:
       - name: Build libwg
         run: cd libwg && ./build.sh
       - name: Set package version
-        run: node -e 'const fs=require("fs"); const path="apps/desktop/src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(path)); config.version=process.env.RELEASE_VERSION.replace(/^v/, ""); fs.writeFileSync(path, JSON.stringify(config, null, 2)+"\n")'
+        run: node apps/desktop/scripts/set-release-version.mjs "$RELEASE_VERSION"
       - name: Build Debian package
         run: |
           npm --prefix apps/desktop ci
@@ -71,7 +71,7 @@ jobs:
       - name: Build libwg
         run: cd libwg && ./build.sh
       - name: Set package version
-        run: node -e 'const fs=require("fs"); const path="apps/desktop/src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(path)); config.version=process.env.RELEASE_VERSION.replace(/^v/, ""); fs.writeFileSync(path, JSON.stringify(config, null, 2)+"\n")'
+        run: node apps/desktop/scripts/set-release-version.mjs "$RELEASE_VERSION"
       - name: Build macOS bundles
         run: |
           npm --prefix apps/desktop ci
@@ -120,7 +120,7 @@ jobs:
         run: cd libwg/wireguard-go && make libwg && mv libwg.* ..
       - name: Set package version
         shell: pwsh
-        run: node -e 'const fs=require("fs"); const path="apps/desktop/src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(path)); config.version=process.env.RELEASE_VERSION.replace(/^v/, ""); fs.writeFileSync(path, JSON.stringify(config, null, 2)+"\n")'
+        run: node apps/desktop/scripts/set-release-version.mjs $env:RELEASE_VERSION
       - name: Build Windows bundles
         run: |
           npm --prefix apps/desktop ci

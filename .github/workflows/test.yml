@@ -33,6 +33,8 @@ jobs:
         run: cd libwg && ./build.sh
       - name: Install frontend dependencies
         run: npm --prefix apps/desktop ci
+      - name: Test release version mapping
+        run: npm --prefix apps/desktop run test:release-version
       - name: Stage desktop helper
         run: npm --prefix apps/desktop run build:helper
       - name: Test Rust workspace

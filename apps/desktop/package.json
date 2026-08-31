@@ -10,6 +10,7 @@
     "build:helper:release": "node scripts/build-helper.mjs release",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test:release-version": "node --test scripts/set-release-version.test.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {
