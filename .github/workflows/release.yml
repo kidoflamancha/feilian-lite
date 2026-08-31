@@ -124,12 +124,12 @@ jobs:
       - name: Build Windows bundles
         run: |
           npm --prefix apps/desktop ci
-          npm --prefix apps/desktop run tauri -- build
+          npm --prefix apps/desktop run tauri -- build --target x86_64-pc-windows-gnu
       - uses: actions/upload-artifact@v7
         with:
           name: feilian-lite-windows
           path: |
-            target/release/bundle/nsis/*.exe
-            target/release/bundle/msi/*.msi
+            target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
+            target/x86_64-pc-windows-gnu/release/bundle/msi/*.msi
           if-no-files-found: error
           retention-days: 14

@@ -136,7 +136,7 @@ jobs:
       - name: Build Windows installers
         shell: pwsh
         run: |
-          npm --prefix apps/desktop run tauri -- build --bundles nsis,msi 2>&1 | Tee-Object -FilePath windows-bundle.log
+          npm --prefix apps/desktop run tauri -- build --target x86_64-pc-windows-gnu --bundles nsis,msi 2>&1 | Tee-Object -FilePath windows-bundle.log
           if ($LASTEXITCODE -ne 0) {
             $details = (Get-Content windows-bundle.log -Tail 60) -join "`n"
             $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
