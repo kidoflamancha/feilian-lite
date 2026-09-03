@@ -239,13 +239,14 @@ unsafe impl Send for Client {}
 unsafe impl Sync for Client {}
 
 pub async fn get_company_url(code: &str) -> anyhow::Result<RespCompany> {
-    let c = ClientBuilder::new().build().context("build client")?;
+    let c = corplink_client_builder().build().context("build client")?;
     let mut m = Map::new();
     m.insert("code".to_string(), json!(code));
     let body = serde_json::to_string(&m).context("serialize company request body")?;
 
     let resp = c
         .post(URL_GET_COMPANY)
+        .header(header::CONTENT_TYPE, "application/json")
         .body(body)
         .send()
         .await

@@ -94,7 +94,7 @@ impl AppController {
         }
 
         let company = get_company_url(company_code).await.map_err(|error| {
-            ControllerError::new("company_discovery_failed", error.to_string(), true)
+            ControllerError::new("company_discovery_failed", format!("{error:#}"), true)
         })?;
         let platform = configuration.platform.as_config_value().to_string();
         let config = Config::create_desktop_profile(
@@ -117,7 +117,7 @@ impl AppController {
         )?;
         self.delete_optional_profile_secrets()?;
         let client = Client::new(config)
-            .map_err(|error| ControllerError::new("auth_client_failed", error.to_string(), true))?;
+            .map_err(|error| ControllerError::new("auth_client_failed", format!("{error:#}"), true))?;
         let display_name = if company.zh_name.is_empty() {
             company.en_name
         } else {
@@ -143,7 +143,7 @@ impl AppController {
         self.load_auth_if_needed(&mut auth).await?;
         let session = auth.session.as_mut().ok_or_else(not_configured_error)?;
         let challenge = session.client.begin_qr_login().await.map_err(|error| {
-            ControllerError::new("qr_login_start_failed", error.to_string(), true)
+            ControllerError::new("qr_login_start_failed", format!("{error:#}"), true)
         })?;
         session.challenge = Some(challenge);
         Ok(auth.snapshot())
@@ -165,7 +165,7 @@ impl AppController {
             .poll_qr_login(&token)
             .await
             .map_err(|error| {
-                ControllerError::new("qr_login_poll_failed", error.to_string(), true)
+                ControllerError::new("qr_login_poll_failed", format!("{error:#}"), true)
             })? {
             QrPollStatus::Pending => {}
             QrPollStatus::Authenticated => {
@@ -273,7 +273,7 @@ impl AppController {
             .connect_vpn_node(node_id)
             .await
             .map_err(|error| {
-                ControllerError::new("tunnel_prepare_failed", error.to_string(), true)
+                ControllerError::new("tunnel_prepare_failed", format!("{error:#}"), true)
             })?;
         let spec = tunnel_spec(mode, node_name, &wg_conf);
         match helper.start(spec).await {
@@ -346,7 +346,7 @@ impl AppController {
             .disconnect_vpn(&active.config)
             .await
             .map_err(|error| {
-                ControllerError::new("server_disconnect_failed", error.to_string(), true)
+                ControllerError::new("server_disconnect_failed", format!("{error:#}"), true)
             })
     }
 
@@ -368,7 +368,7 @@ impl AppController {
         let company_code = config.company_name.clone();
         let platform = AuthPlatform::from_config_value(config.platform.as_deref());
         let client = Client::new(config)
-            .map_err(|error| ControllerError::new("auth_client_failed", error.to_string(), true))?;
+            .map_err(|error| ControllerError::new("auth_client_failed", format!("{error:#}"), true))?;
         auth.session = Some(AuthSession {
             client,
             company_name: company_code.clone(),
@@ -641,7 +641,7 @@ async fn load_nodes(client: &mut Client) -> Result<Vec<AuthNode>, ControllerErro
         .list_vpn_nodes()
         .await
         .map(|nodes| nodes.into_iter().map(AuthNode::from).collect())
-        .map_err(|error| ControllerError::new("node_list_failed", error.to_string(), true))
+        .map_err(|error| ControllerError::new("node_list_failed", format!("{error:#}"), true))
 }
 
 async fn remove_if_exists(path: &Path) -> Result<(), ControllerError> {
@@ -653,11 +653,11 @@ async fn remove_if_exists(path: &Path) -> Result<(), ControllerError> {
 }
 
 fn auth_storage_error(error: impl std::fmt::Display) -> ControllerError {
-    ControllerError::new("auth_storage_failed", error.to_string(), true)
+    ControllerError::new("auth_storage_failed", format!("{error:#}"), true)
 }
 
 fn secret_storage_error(error: impl std::fmt::Display) -> ControllerError {
-    ControllerError::new("secret_storage_failed", error.to_string(), true)
+    ControllerError::new("secret_storage_failed", format!("{error:#}"), true)
 }
 
 fn not_configured_error() -> ControllerError {
