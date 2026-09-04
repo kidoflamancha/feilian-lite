@@ -38,10 +38,8 @@ impl HelperLauncher {
             endpoints.set_server_pid(mode, 0);
         }
         let client = endpoints.client(mode);
-        match client.hello(env!("CARGO_PKG_VERSION")).await {
-            Ok(_) => return Ok(client),
-            Err(error) if helper_is_unavailable(&error) => {}
-            Err(error) => return Err(ControllerError::from_helper_client(error)),
+        if client.hello(env!("CARGO_PKG_VERSION")).await.is_ok() {
+            return Ok(client);
         }
 
         secure_runtime_directory(&endpoints.data_dir)?;
@@ -695,15 +693,25 @@ fn quote_windows_argument(argument: &str) -> String {
 }
 
 fn helper_is_unavailable(error: &ClientError) -> bool {
-    matches!(error, ClientError::ServerProcessIdentity { .. })
-        || matches!(
-            error,
+    matches!(
+        error,
+        ClientError::ServerIdentity { .. }
+            | ClientError::ServerProcessIdentity { .. }
+            | ClientError::RequestMismatch { .. }
+            | ClientError::UnexpectedResponse(_)
+            | ClientError::Timeout
+    ) || matches!(
+        error,
         ClientError::Io(io_error)
             if matches!(
                 io_error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::TimedOut
             )
-        )
+    )
 }
 
 fn secure_runtime_directory(path: &Path) -> Result<(), ControllerError> {

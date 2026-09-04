@@ -9,8 +9,8 @@ use feilian_ipc::{
     TunnelStats, TunnelStatus,
 };
 use feilian_lite::{
-    get_company_url, Client, Config, QrChallenge, QrPollStatus, VpnNode, WgConf, PLATFORM_LARK,
-    PLATFORM_OIDC,
+    get_company_url, Client, Config, QrChallenge, QrPollStatus, RespCompany, VpnNode, WgConf,
+    PLATFORM_LARK, PLATFORM_OIDC,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -93,9 +93,26 @@ impl AppController {
             ));
         }
 
-        let company = get_company_url(company_code).await.map_err(|error| {
-            ControllerError::new("company_discovery_failed", format!("{error:#}"), true)
-        })?;
+        let company = if company_code.contains('.') || company_code.contains(':') {
+            RespCompany {
+                name: company_code.to_string(),
+                zh_name: company_code.to_string(),
+                en_name: company_code.to_string(),
+                domain: company_code
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .trim_end_matches('/')
+                    .to_string(),
+                enable_self_signed: false,
+                self_signed_cert: String::new(),
+                enable_public_key: false,
+                public_key: String::new(),
+            }
+        } else {
+            get_company_url(company_code).await.map_err(|error| {
+                ControllerError::new("company_discovery_failed", format!("{error:#}"), true)
+            })?
+        };
         let platform = configuration.platform.as_config_value().to_string();
         let config = Config::create_desktop_profile(
             &self.profile_path,
@@ -743,7 +760,8 @@ pub(crate) struct HelperEndpoints {
     system_socket: PathBuf,
     user_socket: PathBuf,
     #[cfg(unix)]
-    system_uid: u32,
+    #[allow(dead_code)]
+    pub(crate) system_uid: u32,
     #[cfg(unix)]
     pub(crate) user_uid: u32,
     #[cfg(unix)]
@@ -752,6 +770,8 @@ pub(crate) struct HelperEndpoints {
     system_pid: Arc<AtomicU32>,
     #[cfg(windows)]
     user_pid: Arc<AtomicU32>,
+    system_client: HelperClient,
+    user_client: HelperClient,
 }
 
 impl HelperEndpoints {
@@ -770,6 +790,24 @@ impl HelperEndpoints {
             data_dir.join("system-helper.sock"),
             data_dir.join("user-helper.sock"),
         );
+        #[cfg(unix)]
+        let user_uid = current_uid();
+        #[cfg(unix)]
+        let user_gid = current_gid();
+        #[cfg(unix)]
+        let system_client = HelperClient::new(&system_socket, 0);
+        #[cfg(unix)]
+        let user_client = HelperClient::new(&user_socket, user_uid);
+
+        #[cfg(windows)]
+        let system_pid = Arc::new(AtomicU32::new(0));
+        #[cfg(windows)]
+        let user_pid = Arc::new(AtomicU32::new(0));
+        #[cfg(windows)]
+        let system_client = HelperClient::new(&system_socket, Arc::clone(&system_pid));
+        #[cfg(windows)]
+        let user_client = HelperClient::new(&user_socket, Arc::clone(&user_pid));
+
         Self {
             data_dir: data_dir.to_path_buf(),
             system_socket,
@@ -777,13 +815,15 @@ impl HelperEndpoints {
             #[cfg(unix)]
             system_uid: 0,
             #[cfg(unix)]
-            user_uid: current_uid(),
+            user_uid,
             #[cfg(unix)]
-            user_gid: current_gid(),
+            user_gid,
             #[cfg(windows)]
-            system_pid: Arc::new(AtomicU32::new(0)),
+            system_pid,
             #[cfg(windows)]
-            user_pid: Arc::new(AtomicU32::new(0)),
+            user_pid,
+            system_client,
+            user_client,
         }
     }
 
@@ -795,17 +835,9 @@ impl HelperEndpoints {
     }
 
     pub(crate) fn client(&self, mode: HelperMode) -> HelperClient {
-        #[cfg(unix)]
         match mode {
-            HelperMode::SystemSplit => HelperClient::new(&self.system_socket, self.system_uid),
-            HelperMode::Socks5 => HelperClient::new(&self.user_socket, self.user_uid),
-        }
-        #[cfg(windows)]
-        match mode {
-            HelperMode::SystemSplit => {
-                HelperClient::new(&self.system_socket, Arc::clone(&self.system_pid))
-            }
-            HelperMode::Socks5 => HelperClient::new(&self.user_socket, Arc::clone(&self.user_pid)),
+            HelperMode::SystemSplit => self.system_client.clone(),
+            HelperMode::Socks5 => self.user_client.clone(),
         }
     }
 

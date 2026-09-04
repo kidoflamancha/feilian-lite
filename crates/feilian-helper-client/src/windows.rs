@@ -24,6 +24,7 @@ pub struct HelperClient {
     expected_server_pid: Arc<AtomicU32>,
     timeout: Duration,
     next_request_id: Arc<AtomicU64>,
+    exchange_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl HelperClient {
@@ -33,6 +34,7 @@ impl HelperClient {
             expected_server_pid,
             timeout: Duration::from_secs(10),
             next_request_id: Arc::new(AtomicU64::new(1)),
+            exchange_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -92,6 +94,7 @@ impl HelperClient {
     }
 
     async fn send(&self, command: Command) -> Result<HelperResponse, ClientError> {
+        let _guard = self.exchange_lock.lock().await;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let request = Request::new(request_id, command);
         timeout(self.timeout, self.exchange(request))
